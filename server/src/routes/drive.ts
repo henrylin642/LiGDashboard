@@ -14,12 +14,11 @@ const getAuthClient = () => {
     if (!SERVICE_ACCOUNT_EMAIL || !PRIVATE_KEY) {
         return null;
     }
-    return new google.auth.JWT(
-        SERVICE_ACCOUNT_EMAIL,
-        undefined,
-        PRIVATE_KEY,
-        ['https://www.googleapis.com/auth/drive.readonly']
-    );
+    return new google.auth.JWT({
+        email: SERVICE_ACCOUNT_EMAIL,
+        key: PRIVATE_KEY,
+        scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+    });
 };
 
 router.get('/:filename', async (req, res) => {
