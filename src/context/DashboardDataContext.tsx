@@ -178,7 +178,7 @@ async function loadProjects(): Promise<Project[]> {
     console.warn("[DashboardData] 讀取 Airtable projects 失敗，改用 CSV。", error);
   }
 
-  const rows = await fetchCsv<Project>("/data/projects.csv", (row) => {
+  const rows = await fetchCsv<Project>("/api/data/projects.csv", (row) => {
     const projectId = parseNumber(row["ProjectID"]);
     if (projectId === null) return null;
 
@@ -203,7 +203,7 @@ async function loadProjects(): Promise<Project[]> {
 }
 
 async function loadScans(): Promise<ScanRecord[]> {
-  return fetchCsv<ScanRecord>("/data/scandata.csv", (row) => {
+  return fetchCsv<ScanRecord>("/api/data/scandata.csv", (row) => {
     const ligId = parseNumber(row["ligtag_id"]);
     if (ligId === null) return null;
     const time = parseDate(row["time"]);
@@ -218,7 +218,7 @@ async function loadScans(): Promise<ScanRecord[]> {
 }
 
 async function loadLights(): Promise<LightRecord[]> {
-  return fetchCsv<LightRecord>("/data/lights.csv", (row) => {
+  return fetchCsv<LightRecord>("/api/data/lights.csv", (row) => {
     const ligId = parseNumber(row["Id"]);
     if (ligId === null) return null;
     return {
@@ -235,7 +235,7 @@ async function loadLights(): Promise<LightRecord[]> {
 
 async function loadCoordinateSystems(): Promise<CoordinateSystemRecord[]> {
   return fetchCsv<CoordinateSystemRecord>(
-    "/data/coordinate_systems.csv",
+    "/api/data/coordinate_systems.csv",
     (row) => {
       const id = parseNumber(row["Id"]);
       if (id === null) return null;
@@ -252,7 +252,7 @@ async function loadCoordinateSystems(): Promise<CoordinateSystemRecord[]> {
 }
 
 async function loadClicks(): Promise<ClickRecord[]> {
-  return fetchCsv<ClickRecord>("/data/obj_click_log.csv", (row) => {
+  return fetchCsv<ClickRecord>("/api/data/obj_click_log.csv", (row) => {
     const objId = parseNumber(row["obj_id"]);
     const time = parseDate(row["time"]);
     if (objId === null || !time) return null;
@@ -301,7 +301,7 @@ async function loadArObjects(token?: string): Promise<ArObjectRecord[]> {
     }
   }
 
-  return fetchCsv<ArObjectRecord>("/data/ar_object_2025-10-21_11h55m15.csv", (row) => {
+  return fetchCsv<ArObjectRecord>("/api/data/ar_object_2025-10-21_11h55m15.csv", (row) => {
     const id = parseNumber(row["Id"]);
     if (id === null) return null;
     const { locationX, locationY, locationZ } = parseLocation(row["Location"]);
@@ -318,7 +318,7 @@ async function loadArObjects(token?: string): Promise<ArObjectRecord[]> {
 }
 
 async function loadScanCoordinates(): Promise<ScanCoordinateRecord[]> {
-  return fetchCsv<ScanCoordinateRecord>("/data/scan_coordinate.csv", (row) => {
+  return fetchCsv<ScanCoordinateRecord>("/api/data/scan_coordinate.csv", (row) => {
     const id = parseNumber(row["Id"]);
     if (id === null) return null;
     const lightId = parseNumber(row["Light ID"]);

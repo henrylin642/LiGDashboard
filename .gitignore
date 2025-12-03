@@ -25,3 +25,6 @@ dist-ssr
 
 # Server environment variables
 server/.env
+
+# Service Account Keys
+dashboard-lig-*.json
