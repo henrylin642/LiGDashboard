@@ -85,7 +85,7 @@ export async function loginLigDashboard(
 
 export async function fetchLightOptions(token?: Token): Promise<LightOption[]> {
   if (!token) {
-    return fetchCsv("/data/light.csv", (row) => {
+    return fetchCsv("/api/data/light.csv", (row) => {
       const id = row["Id"]?.trim();
       if (!id) return null;
       const name = row["Name"]?.trim() || row["Location"]?.trim() || "";
@@ -146,7 +146,7 @@ export async function fetchLightOptions(token?: Token): Promise<LightOption[]> {
 
     throw new Error("無法取得燈具資料");
   } catch (error) {
-    const rows = await fetchCsv("/data/light.csv", (row) => {
+    const rows = await fetchCsv("/api/data/light.csv", (row) => {
       const id = row["Id"]?.trim();
       if (!id) return null;
       const name = row["Name"]?.trim() || row["Location"]?.trim() || "";
@@ -205,7 +205,7 @@ export async function fetchCoordinatesForLight(
     if (lastError) throw lastError;
     throw new Error("無法取得座標資料");
   } catch (error) {
-    const rows = await fetchCsv("/data/scan_coordinate.csv", (row) => {
+    const rows = await fetchCsv("/api/data/scan_coordinate.csv", (row) => {
       const rowLightId = row["Light ID"]?.trim();
       if (rowLightId !== String(lightId).trim()) return null;
       const id = row["Id"]?.trim();
@@ -219,7 +219,7 @@ export async function fetchCoordinatesForLight(
 
 export async function fetchSceneOptions(token?: Token): Promise<SceneOption[]> {
   if (!token) {
-    return fetchCsv("/data/scene.csv", (row) => {
+    return fetchCsv("/api/data/scene.csv", (row) => {
       const id = row["Id"]?.trim();
       if (!id) return null;
       const name = row["Name"]?.trim() || id;
@@ -251,7 +251,7 @@ export async function fetchSceneOptions(token?: Token): Promise<SceneOption[]> {
       })
       .filter(Boolean) as SceneOption[];
   } catch (error) {
-    const rows = await fetchCsv("/data/scene.csv", (row) => {
+    const rows = await fetchCsv("/api/data/scene.csv", (row) => {
       const id = row["Id"]?.trim();
       if (!id) return null;
       const name = row["Name"]?.trim() || id;
