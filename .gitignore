@@ -28,3 +28,6 @@ server/.env
 
 # Service Account Keys
 dashboard-lig-*.json
+
+# Local Data
+public/data
