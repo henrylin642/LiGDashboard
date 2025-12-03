@@ -858,7 +858,6 @@ function AllProjectsPage({
   };
 
   const dailyCumulative = computeCumulative(dailySeries);
-  const dailyClickCumulative = computeCumulative(dailyClickSeries);
   const scanVolumeDailyCumulative = computeCumulative(scanVolumeDaily);
   const scanVolumeMonthlyCumulative = computeCumulative(scanVolumeMonthly);
 
@@ -3094,14 +3093,6 @@ function sortAirtableProjects(items: AirtableProject[]): AirtableProject[] {
   });
 }
 
-function computeNextProjectId(projects: AirtableProject[]): string {
-  if (projects.length === 0) return "1";
-  const maxId = projects.reduce((max, p) => {
-    const num = toProjectIdNumber(p.projectId);
-    return num > max ? num : max;
-  }, 0);
-  return String(maxId + 1);
-}
 
 function SettingsPage({
   ownerOptions,
