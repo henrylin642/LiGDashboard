@@ -2,7 +2,7 @@ import { fetchCsv } from "../utils/csv";
 
 type Token = string;
 
-const DEFAULT_API_BASE = "https://api.lig.com.tw";
+const DEFAULT_API_BASE = "/api/lig";
 const API_BASE = (import.meta.env.VITE_LIG_API_BASE as string | undefined)?.replace(/\/$/, "") || DEFAULT_API_BASE;
 
 export interface LightOption {
@@ -44,12 +44,12 @@ export interface ArObjectDetail {
   sceneId: number | null;
   sceneName: string | null;
   location:
-    | {
-        x: number | null;
-        y: number | null;
-        z: number | null;
-      }
-    | null;
+  | {
+    x: number | null;
+    y: number | null;
+    z: number | null;
+  }
+  | null;
   raw?: unknown;
 }
 
@@ -115,12 +115,12 @@ export async function fetchLightOptions(token?: Token): Promise<LightOption[]> {
         const items = Array.isArray(data)
           ? data
           : Array.isArray((data as any).lights)
-          ? (data as any).lights
-          : Array.isArray((data as any).lightids)
-          ? (data as any).lightids
-          : Array.isArray((data as any).light_ids)
-          ? (data as any).light_ids
-          : [];
+            ? (data as any).lights
+            : Array.isArray((data as any).lightids)
+              ? (data as any).lightids
+              : Array.isArray((data as any).light_ids)
+                ? (data as any).light_ids
+                : [];
         if (!items.length) {
           lastError = new Error("空資料");
           continue;
@@ -182,8 +182,8 @@ export async function fetchCoordinatesForLight(
         const list = Array.isArray(json?.cs_list)
           ? json.cs_list
           : Array.isArray(json?.coordinate_systems)
-          ? json.coordinate_systems
-          : [];
+            ? json.coordinate_systems
+            : [];
         if (!list.length) {
           lastError = new Error("空資料");
           continue;
@@ -237,10 +237,10 @@ export async function fetchSceneOptions(token?: Token): Promise<SceneOption[]> {
     const items = Array.isArray(data)
       ? data
       : Array.isArray((data as any).scenes)
-      ? (data as any).scenes
-      : Array.isArray((data as any).data)
-      ? (data as any).data
-      : [];
+        ? (data as any).scenes
+        : Array.isArray((data as any).data)
+          ? (data as any).data
+          : [];
     if (!items.length) throw new Error("空資料");
     return items
       .map((item: any) => {
@@ -273,10 +273,10 @@ export async function fetchScenesWithMeta(token?: Token): Promise<SceneDetail[]>
   const items = Array.isArray(data)
     ? data
     : Array.isArray((data as any).scenes)
-    ? (data as any).scenes
-    : Array.isArray((data as any).data)
-    ? (data as any).data
-    : [];
+      ? (data as any).scenes
+      : Array.isArray((data as any).data)
+        ? (data as any).data
+        : [];
   return items
     .map((item: any) => {
       const id = String(item.id ?? item.scene_id ?? "").trim();
@@ -305,8 +305,8 @@ export async function fetchAssetsWithMeta(token?: Token): Promise<AssetDetail[]>
   const items = Array.isArray(data)
     ? data
     : Array.isArray((data as any).assets)
-    ? (data as any).assets
-    : [];
+      ? (data as any).assets
+      : [];
   return items
     .map((item: any) => {
       const id = String(item.id ?? item.asset_id ?? "").trim();
@@ -339,10 +339,10 @@ export async function fetchCoordinateSystemsWithMeta(
   const list = Array.isArray(data)
     ? data
     : Array.isArray((data as any).coordinate_systems)
-    ? (data as any).coordinate_systems
-    : Array.isArray((data as any).scenes)
-    ? (data as any).scenes
-    : [];
+      ? (data as any).coordinate_systems
+      : Array.isArray((data as any).scenes)
+        ? (data as any).scenes
+        : [];
   return list
     .map((item: any) => {
       const id = String(item.id ?? item.coordinate_system_id ?? "").trim();
@@ -372,8 +372,8 @@ export async function fetchArObjectsWithMeta(
   const list = Array.isArray(data)
     ? data
     : Array.isArray((data as any).ar_objects)
-    ? (data as any).ar_objects
-    : [];
+      ? (data as any).ar_objects
+      : [];
   return list
     .map((item: any) => {
       const id = String(item.id ?? item.obj_id ?? "").trim();
@@ -400,20 +400,20 @@ export async function fetchArObjectsWithMeta(
         typeof location?.x === "number"
           ? location.x
           : typeof location?.X === "number"
-          ? location.X
-          : null;
+            ? location.X
+            : null;
       const locationY =
         typeof location?.y === "number"
           ? location.y
           : typeof location?.Y === "number"
-          ? location.Y
-          : null;
+            ? location.Y
+            : null;
       const locationZ =
         typeof location?.z === "number"
           ? location.z
           : typeof location?.Z === "number"
-          ? location.Z
-          : null;
+            ? location.Z
+            : null;
       return {
         id,
         name,
@@ -466,20 +466,20 @@ export async function fetchArObjectById(
     typeof location?.x === "number"
       ? location.x
       : typeof location?.X === "number"
-      ? location.X
-      : null;
+        ? location.X
+        : null;
   const locationY =
     typeof location?.y === "number"
       ? location.y
       : typeof location?.Y === "number"
-      ? location.Y
-      : null;
+        ? location.Y
+        : null;
   const locationZ =
     typeof location?.z === "number"
       ? location.z
       : typeof location?.Z === "number"
-      ? location.Z
-      : null;
+        ? location.Z
+        : null;
   return {
     id,
     name,

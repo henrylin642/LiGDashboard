@@ -9,6 +9,14 @@ type Middleware = (req: IncomingMessage, res: ServerResponse, next: () => void) 
 
 export default defineConfig({
   plugins: [react(), internalDataSyncPlugin()],
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+      },
+    },
+  },
 });
 
 function internalDataSyncPlugin() {

@@ -325,6 +325,7 @@ export function computeDailyScanSeries(
   end: Date
 ): DailyScanPoint[] {
   const { projectScans, orphanScans } = buildProjectScanIndex(data);
+  if (start > end) return [];
   const days = eachDayOfInterval({ start: startOfDay(start), end: endOfDay(end) });
 
   return days.map((day) => {
@@ -367,6 +368,7 @@ export function computeDailyClickSeries(
 ): DailyClickPoint[] {
   const rangeStart = startOfDay(start);
   const rangeEnd = endOfDay(end);
+  if (rangeStart > rangeEnd) return [];
   const days = eachDayOfInterval({ start: rangeStart, end: rangeEnd });
   if (days.length === 0) return [];
 
@@ -399,6 +401,7 @@ export function computeScanVolumeSeries(
   if (windowDays <= 0) return [];
   const end = endOfDay(referenceDate);
   const start = startOfDay(subDays(end, windowDays - 1));
+  if (start > end) return [];
   const days = eachDayOfInterval({ start, end });
 
   if (days.length === 0) return [];
@@ -466,6 +469,7 @@ export function computeClickVolumeSeries(
   if (windowDays <= 0) return [];
   const end = endOfDay(referenceDate);
   const start = startOfDay(subDays(end, windowDays - 1));
+  if (start > end) return [];
   const days = eachDayOfInterval({ start, end });
   if (days.length === 0) return [];
 
@@ -731,8 +735,8 @@ function summarizeClickSessions(sessions: ClickSessionRecord[]): ClickSessionIns
     durations.length % 2 === 1
       ? durations[(durations.length - 1) / 2]
       : (durations[durations.length / 2 - 1] +
-          durations[durations.length / 2]) /
-        2;
+        durations[durations.length / 2]) /
+      2;
   const avgDurationSeconds =
     totalSessions > 0 ? totalDuration / totalSessions : 0;
 
@@ -895,7 +899,7 @@ export function computeUserAcquisitionSeriesInRange(
 ): UserAcquisitionPoint[] {
   const rangeStart = startOfDay(start);
   const rangeEnd = endOfDay(end);
-  if (rangeEnd < rangeStart) return [];
+  if (rangeStart > rangeEnd) return [];
   const days = eachDayOfInterval({ start: rangeStart, end: rangeEnd });
   if (days.length === 0) return [];
 
@@ -1071,16 +1075,16 @@ export function computeProjectUserAcquisition(
     const sceneId = obj?.sceneId ?? null;
     const sceneProjects = sceneId !== null ? sceneToProjects.get(sceneId) : undefined;
     let primaryProject: number | null = null;
-  if (sceneProjects) {
-    for (const candidate of sceneProjects) {
-      if (!projectIdSet.has(candidate)) continue;
-      if (!isWithinProjectRange(data.projectById?.[candidate], click.time)) {
-        continue;
+    if (sceneProjects) {
+      for (const candidate of sceneProjects) {
+        if (!projectIdSet.has(candidate)) continue;
+        if (!isWithinProjectRange(data.projectById?.[candidate], click.time)) {
+          continue;
+        }
+        primaryProject = candidate;
+        break;
       }
-      primaryProject = candidate;
-      break;
     }
-  }
 
     const existing = firstClickInfo.get(userId);
     if (!existing || click.time < existing.time) {
@@ -1231,8 +1235,8 @@ export function computeSceneUserStats(
       info?.name ?? `Scene ${sceneId.toLocaleString(undefined)}`;
     const projectNames = info
       ? Array.from(info.projectNames).sort((a, b) =>
-          a.localeCompare(b, undefined, { sensitivity: "base" })
-        )
+        a.localeCompare(b, undefined, { sensitivity: "base" })
+      )
       : [];
 
     rows.push({
@@ -1392,22 +1396,22 @@ export function computeSceneMarketingStats(
     const info = sceneInfo.get(sceneId);
     const projectNames = info
       ? Array.from(info.projectNames).sort((a, b) =>
-          a.localeCompare(b, undefined, { sensitivity: "base" })
-        )
+        a.localeCompare(b, undefined, { sensitivity: "base" })
+      )
       : [];
     const total = stat.total;
     const objectShares: SceneObjectShare[] =
       total === 0
         ? []
         : Array.from(stat.objectCounts.entries())
-            .map(([objId, clicks]) => ({
-              objId,
-              name: objectMeta.get(objId)?.name ?? `Object ${objId}`,
-              clicks,
-              share: clicks / total,
-            }))
-            .sort((a, b) => b.clicks - a.clicks)
-            .slice(0, 5);
+          .map(([objId, clicks]) => ({
+            objId,
+            name: objectMeta.get(objId)?.name ?? `Object ${objId}`,
+            clicks,
+            share: clicks / total,
+          }))
+          .sort((a, b) => b.clicks - a.clicks)
+          .slice(0, 5);
     const sessionCount = sceneSessionSets.get(sceneId)?.size ?? 0;
     const uniqueUsers = stat.users.size;
     rows.push({
@@ -1507,7 +1511,7 @@ export function computeUserBehaviorStats(
     avgRevisitDays:
       revisitDiffs.length > 0
         ? revisitDiffs.reduce((sum, value) => sum + value, 0) /
-          revisitDiffs.length
+        revisitDiffs.length
         : null,
     frequencyBuckets: freqBuckets,
   };
@@ -1744,6 +1748,45 @@ export function buildProjectScanIndex(data: DashboardData): {
   }
 
   return { projectScans, orphanScans };
+}
+
+export function buildProjectClickIndex(data: DashboardData): {
+  projectClicks: Record<number, ClickRecord[]>;
+  orphanClicks: ClickRecord[];
+} {
+  const projectClicks: Record<number, ClickRecord[]> = {};
+  const orphanClicks: ClickRecord[] = [];
+  const objectProjectMap = buildObjectProjectIndex(data);
+
+  for (const project of data.projects) {
+    projectClicks[project.projectId] = [];
+  }
+
+  for (const click of data.clicks) {
+    const projectIds = objectProjectMap.get(click.objId);
+    if (!projectIds || projectIds.length === 0) {
+      orphanClicks.push(click);
+      continue;
+    }
+
+    let matched = false;
+    for (const projectId of projectIds) {
+      const project = data.projectById?.[projectId];
+      if (!project) continue;
+      if (!isWithinProjectRange(project, click.time)) continue;
+      if (!projectClicks[projectId]) {
+        projectClicks[projectId] = [];
+      }
+      projectClicks[projectId].push(click);
+      matched = true;
+    }
+
+    if (!matched) {
+      orphanClicks.push(click);
+    }
+  }
+
+  return { projectClicks, orphanClicks };
 }
 
 function buildObjectProjectIndex(data: DashboardData): Map<number, number[]> {

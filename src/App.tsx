@@ -13,6 +13,7 @@ import {
 } from "date-fns";
 import "./App.css";
 import { useDashboardData } from "./context/DashboardDataContext";
+import { ProjectFunnelTable } from "./components/ProjectFunnelTable";
 import {
   computeClickRanking,
   buildClickSessionAnalytics,
@@ -36,6 +37,8 @@ import {
   computeProjectFunnelRows,
   computeClickDaypartStats,
   computeProjectObjectAttribution,
+  buildProjectScanIndex,
+  buildProjectClickIndex,
   type ClickRankingRow,
   type ClickSessionAnalytics,
   type ClickSessionRecord,
@@ -72,6 +75,8 @@ import {
 } from "./services/ligApi";
 import { triggerDataSync } from "./services/dataSync";
 
+type ScopedData = DashboardData;
+
 type PageKey = "all" | "project" | "wall" | "settings";
 
 interface DateRange {
@@ -80,12 +85,12 @@ interface DateRange {
 }
 
 function App() {
-const dataState = useDashboardData();
-const [page, setPage] = useState<PageKey>("all");
-const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
-const [currentTime, setCurrentTime] = useState(new Date());
-const [dateRange, setDateRange] = useState<DateRange>(() => createDefaultRange());
-const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+  const dataState = useDashboardData();
+  const [page, setPage] = useState<PageKey>("all");
+  const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [dateRange, setDateRange] = useState<DateRange>(() => createDefaultRange());
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
 
   const readyData = dataState.status === "ready" ? dataState.data : null;
 
@@ -223,12 +228,20 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
     [scopedData, dateRange]
   );
 
+  const dailyClickSeries = useMemo(
+    () =>
+      scopedData
+        ? computeDailyClickSeries(scopedData, dateRange.start, dateRange.end)
+        : [],
+    [scopedData, dateRange]
+  );
+
   const heatmapPoints = useMemo(
     () =>
       scopedData
         ? computeHeatmapPoints(scopedData, dateRange.start, dateRange.end).filter(
-            (item) => item.scans > 0
-          )
+          (item) => item.scans > 0
+        )
         : [],
     [scopedData, dateRange]
   );
@@ -293,10 +306,10 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
     () =>
       projectScopedData
         ? computeDailyScanSeries(
-            projectScopedData,
-            dateRange.start,
-            dateRange.end
-          )
+          projectScopedData,
+          dateRange.start,
+          dateRange.end
+        )
         : [],
     [projectScopedData, dateRange]
   );
@@ -305,10 +318,10 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
     () =>
       projectScopedData
         ? computeDailyClickSeries(
-            projectScopedData,
-            dateRange.start,
-            dateRange.end
-          )
+          projectScopedData,
+          dateRange.start,
+          dateRange.end
+        )
         : [],
     [projectScopedData, dateRange]
   );
@@ -329,11 +342,11 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
     () =>
       projectScopedData
         ? computeClickRanking(
-            projectScopedData,
-            dateRange.start,
-            dateRange.end,
-            20
-          )
+          projectScopedData,
+          dateRange.start,
+          dateRange.end,
+          20
+        )
         : [],
     [projectScopedData, dateRange]
   );
@@ -342,10 +355,10 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
     () =>
       projectScopedData
         ? computeSceneUserStats(
-            projectScopedData,
-            dateRange.start,
-            dateRange.end
-          )
+          projectScopedData,
+          dateRange.start,
+          dateRange.end
+        )
         : [],
     [projectScopedData, dateRange]
   );
@@ -360,10 +373,10 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
     () =>
       projectScopedData
         ? computeUserAcquisitionSeriesInRange(
-            projectScopedData,
-            dateRange.start,
-            dateRange.end
-          )
+          projectScopedData,
+          dateRange.start,
+          dateRange.end
+        )
         : [],
     [projectScopedData, dateRange]
   );
@@ -393,6 +406,18 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
     () => (scopedData ? buildClickSessionAnalytics(scopedData) : null),
     [scopedData]
   );
+  const sessionAnalyticsInRange = useMemo(() => {
+    if (!scopedData) return null;
+    const start = dateRange.start;
+    const end = dateRange.end;
+    const filteredClicks = scopedData.clicks.filter(
+      (c) => c.time >= start && c.time <= end
+    );
+    // Create a shallow copy with filtered clicks
+    const filteredData = { ...scopedData, clicks: filteredClicks };
+    return buildClickSessionAnalytics(filteredData);
+  }, [scopedData, dateRange]);
+
   const projectSessionAnalytics = useMemo(
     () => (projectScopedData ? buildClickSessionAnalytics(projectScopedData) : null),
     [projectScopedData]
@@ -402,9 +427,9 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
     () =>
       scopedData && sessionAnalytics
         ? computeObjectMarketingMetrics(
-            scopedData,
-            sessionAnalytics.sessions
-          )
+          scopedData,
+          sessionAnalytics.sessions
+        )
         : [],
     [scopedData, sessionAnalytics]
   );
@@ -421,10 +446,10 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
     () =>
       scopedData && sessionAnalytics
         ? computeUserBehaviorStats(
-            scopedData,
-            sessionAnalytics.sessions,
-            30
-          )
+          scopedData,
+          sessionAnalytics.sessions,
+          30
+        )
         : null,
     [scopedData, sessionAnalytics]
   );
@@ -556,27 +581,24 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
           <nav className="app__nav" aria-label="主頁面切換">
             <button
               type="button"
-              className={`app__nav-button${
-                page === "all" ? " app__nav-button--active" : ""
-              }`}
+              className={`app__nav-button${page === "all" ? " app__nav-button--active" : ""
+                }`}
               onClick={() => setPage("all")}
             >
               總覽
             </button>
             <button
               type="button"
-              className={`app__nav-button${
-                page === "project" ? " app__nav-button--active" : ""
-              }`}
+              className={`app__nav-button${page === "project" ? " app__nav-button--active" : ""
+                }`}
               onClick={() => setPage("project")}
             >
               專案分析
             </button>
             <button
               type="button"
-              className={`app__nav-button${
-                page === "wall" ? " app__nav-button--active" : ""
-              }`}
+              className={`app__nav-button${page === "wall" ? " app__nav-button--active" : ""
+                }`}
               onClick={() => setPage("wall")}
             >
               大屏
@@ -601,6 +623,7 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
             summary={summary}
             projectRankRows={projectRankRows}
             dailySeries={dailySeries}
+            dailyClickSeries={dailyClickSeries}
             heatmapPoints={heatmapPoints}
             clickRanking={clickRanking}
             dateRange={dateRange}
@@ -620,7 +643,7 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
             projectUserAcquisition={projectUserAcquisition}
             sceneUserStats={sceneUserStats}
             latestScanDate={latestScanDate}
-            sessionAnalytics={sessionAnalytics}
+            sessionAnalytics={sessionAnalyticsInRange}
             objectMetrics={objectMarketingMetrics}
             sceneMarketingStats={sceneMarketingStats}
             userBehaviorStats={userBehaviorStats}
@@ -628,6 +651,7 @@ const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
             daypartStats={daypartStats}
             projectObjectAttribution={projectObjectAttribution}
             clickHeatmapPoints={marketingGeoData.heatmapPoints}
+            scopedData={scopedData}
           />
         )}
         {page === "project" && (
@@ -677,6 +701,7 @@ interface AllProjectsPageProps {
   summary: ReturnType<typeof computeScanSummary>;
   projectRankRows: ProjectRankRow[];
   dailySeries: ReturnType<typeof computeDailyScanSeries>;
+  dailyClickSeries: ReturnType<typeof computeDailyClickSeries>;
   heatmapPoints: ReturnType<typeof computeHeatmapPoints>;
   clickRanking: ClickRankingRow[];
   dateRange: DateRange;
@@ -698,6 +723,7 @@ interface AllProjectsPageProps {
   latestScanDate: Date | null;
   sessionAnalytics: ClickSessionAnalytics | null;
   objectMetrics: ObjectMarketingMetric[];
+  scopedData: ScopedData | null;
   sceneMarketingStats: SceneMarketingStat[];
   userBehaviorStats: UserBehaviorStats | null;
   projectFunnelRows: ProjectFunnelRow[];
@@ -716,6 +742,7 @@ function AllProjectsPage({
   summary,
   projectRankRows,
   dailySeries,
+  dailyClickSeries,
   heatmapPoints,
   clickRanking,
   dateRange,
@@ -743,9 +770,72 @@ function AllProjectsPage({
   daypartStats,
   projectObjectAttribution,
   clickHeatmapPoints,
+  scopedData,
 }: AllProjectsPageProps) {
-  const dateRangeLabel = `${format(dateRange.start, "yyyy-MM-dd")} ~ ${format(
-    dateRange.end,
+  const [localDateRange, setLocalDateRange] = useState(dateRange);
+  const [isLoading, setIsLoading] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [selectedDateStats, setSelectedDateStats] = useState<
+    { projectId: number; projectName: string; clicks: number; scans: number }[]
+  >([]);
+
+  useEffect(() => {
+    setLocalDateRange(dateRange);
+  }, [dateRange.start.getTime(), dateRange.end.getTime()]);
+
+  const handleDailyChartClick = (event: any) => {
+    if (!event.points || event.points.length === 0 || !scopedData) return;
+    const dateStr = event.points[0].x;
+    const date = new Date(dateStr);
+    setSelectedDate(date);
+
+    // Compute stats for the selected date
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const { projectScans } = buildProjectScanIndex(scopedData);
+    const { projectClicks } = buildProjectClickIndex(scopedData);
+
+    const statsArray = scopedData.projects
+      .map((project) => {
+        const scans = projectScans[project.projectId] ?? [];
+        const clicks = projectClicks[project.projectId] ?? [];
+
+        const dayScans = scans.filter(
+          (s) => s.time >= startOfDay && s.time <= endOfDay
+        ).length;
+        const dayClicks = clicks.filter(
+          (c) => c.time >= startOfDay && c.time <= endOfDay
+        ).length;
+
+        if (dayScans === 0 && dayClicks === 0) return null;
+
+        return {
+          projectId: project.projectId,
+          projectName: project.name,
+          clicks: dayClicks,
+          scans: dayScans,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null)
+      .sort((a, b) => b.clicks - a.clicks);
+
+    setSelectedDateStats(statsArray);
+  };
+
+  const handleQuery = async () => {
+    setIsLoading(true);
+    // Allow UI to render loading state
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    setDateRange(localDateRange);
+    // Small delay to ensure render completes
+    setTimeout(() => setIsLoading(false), 500);
+  };
+
+  const dateRangeLabel = `${format(localDateRange.start, "yyyy-MM-dd")} ~ ${format(
+    localDateRange.end,
     "yyyy-MM-dd"
   )}`;
 
@@ -758,15 +848,100 @@ function AllProjectsPage({
     return `${(value * 100).toFixed(digits)}%`;
   };
 
-  const dailyData: Partial<Data>[] = [
+  // Helper to compute cumulative sum arrays
+  const computeCumulative = (data: { total: number }[]) => {
+    let sum = 0;
+    return data.map((point) => {
+      sum += point.total;
+      return sum;
+    });
+  };
+
+  const dailyCumulative = computeCumulative(dailySeries);
+  const dailyClickCumulative = computeCumulative(dailyClickSeries);
+  const scanVolumeDailyCumulative = computeCumulative(scanVolumeDaily);
+  const scanVolumeMonthlyCumulative = computeCumulative(scanVolumeMonthly);
+
+  const dailyTrendData: Partial<Data>[] = [
     {
-      type: "scatter",
-      mode: "lines+markers",
+      type: "bar",
       x: dailySeries.map((point) => point.date.toISOString()),
       y: dailySeries.map((point) => point.total),
-      name: "Total Scans",
-      line: { color: "#1f77b4", width: 2 },
-      marker: { size: 6 },
+      marker: {
+        color: dailySeries.map((point) => {
+          const day = point.date.getDay();
+          return day === 0 || day === 6 ? "#d62728" : "#1f77b4";
+        }),
+      },
+      name: "Scans",
+    },
+    {
+      type: "bar",
+      x: dailyClickSeries.map((point) => point.date.toISOString()),
+      y: dailyClickSeries.map((point) => point.total),
+      marker: { color: "#ff7f0e" },
+      name: "Clicks",
+    },
+    {
+      type: "scatter",
+      mode: "lines",
+      x: dailySeries.map((point) => point.date.toISOString()),
+      y: dailyCumulative,
+      name: "Cumulative Scans",
+      yaxis: "y2",
+      line: { color: "#1f77b4", dash: "dot" },
+    },
+  ];
+
+  const scanVolumeDailyData: Partial<Data>[] = [
+    {
+      type: "bar",
+      name: "Scans",
+      x: scanVolumeDaily.map((point) => point.date.toISOString()),
+      y: scanVolumeDaily.map((point) => point.total),
+      marker: { color: "#2ca02c" },
+    },
+    {
+      type: "bar",
+      name: "Clicks",
+      x: clickVolumeDaily.map((point) => point.date.toISOString()),
+      y: clickVolumeDaily.map((point) => point.total),
+      marker: { color: "#ff7f0e" },
+    },
+    {
+      type: "scatter",
+      mode: "lines",
+      name: "Cumulative Scans",
+      x: scanVolumeDaily.map((point) => point.date.toISOString()),
+      y: scanVolumeDailyCumulative,
+      yaxis: "y2",
+      line: { color: "#1f77b4", dash: "dot" },
+    },
+  ];
+
+  const scanVolumeMonthlyData: Partial<Data>[] = [
+    {
+      type: "bar",
+      name: "Scans",
+      x: scanVolumeMonthly.map((point) => point.month.toISOString()),
+      y: scanVolumeMonthly.map((point) => point.total),
+      marker: { color: "#17becf" },
+    },
+    {
+      type: "bar",
+      name: "Clicks",
+      x: clickVolumeMonthly.map((point) => point.month.toISOString()),
+      y: clickVolumeMonthly.map((point) => point.total),
+      marker: { color: "#f59e0b" },
+    },
+    {
+      type: "scatter",
+      mode: "lines",
+      name: "Cumulative Scans",
+      x: scanVolumeMonthly.map((point) => point.month.toISOString()),
+      y: scanVolumeMonthlyCumulative,
+      yaxis: "y2",
+      line: { color: "#1f77b4", dash: "dot" },
     },
   ];
 
@@ -801,75 +976,75 @@ function AllProjectsPage({
     clickHeatmapPoints.length === 0
       ? []
       : [
-          {
-            type: "scattergeo",
-            mode: "markers",
-            lat: clickHeatmapPoints.map((point) => point.lat),
-            lon: clickHeatmapPoints.map((point) => point.lon),
-            text: clickHeatmapPoints.map(
-              (point) =>
-                `${point.name}<br />Clicks: ${point.clicks.toLocaleString()}`
+        {
+          type: "scattergeo",
+          mode: "markers",
+          lat: clickHeatmapPoints.map((point) => point.lat),
+          lon: clickHeatmapPoints.map((point) => point.lon),
+          text: clickHeatmapPoints.map(
+            (point) =>
+              `${point.name}<br />Clicks: ${point.clicks.toLocaleString()}`
+          ),
+          marker: {
+            size: clickHeatmapPoints.map((point) =>
+              Math.max(6, (point.clicks / maxClickHeat) * 40)
             ),
-            marker: {
-              size: clickHeatmapPoints.map((point) =>
-                Math.max(6, (point.clicks / maxClickHeat) * 40)
-              ),
-              color: clickHeatmapPoints.map((point) => point.clicks),
-              colorscale: "YlOrRd",
-              showscale: true,
-              colorbar: { title: { text: "Clicks" } },
-              opacity: 0.85,
-            },
+            color: clickHeatmapPoints.map((point) => point.clicks),
+            colorscale: "YlOrRd",
+            showscale: true,
+            colorbar: { title: { text: "Clicks" } },
+            opacity: 0.85,
           },
-        ];
+        },
+      ];
 
   const hourlyTrendData: Partial<Data>[] =
     daypartStats && daypartStats.hourly.length > 0
       ? [
-          {
-            type: "scatter",
-            mode: "lines+markers" as any,
-            name: "Clicks",
-            x: daypartStats.hourly.map(
-              (point) => `${point.hour.toString().padStart(2, "0")}:00`
-            ),
-            y: daypartStats.hourly.map((point) => point.clicks),
-            line: { color: "#f97316", width: 3 },
-            marker: { size: 6 },
-          },
-        ]
+        {
+          type: "scatter",
+          mode: "lines+markers" as any,
+          name: "Clicks",
+          x: daypartStats.hourly.map(
+            (point) => `${point.hour.toString().padStart(2, "0")}:00`
+          ),
+          y: daypartStats.hourly.map((point) => point.clicks),
+          line: { color: "#f97316", width: 3 },
+          marker: { size: 6 },
+        },
+      ]
       : [];
 
   const daypartHeatmapData: Partial<Data>[] =
     daypartStats && daypartStats.weekdayHourMatrix.length > 0
       ? [
-          {
-            type: "heatmap",
-            z: daypartStats.weekdayHourMatrix,
-            x: Array.from({ length: 24 }, (_, hour) =>
-              `${hour.toString().padStart(2, "0")}:00`
-            ),
-            y: daypartStats.weekdayLabels,
-            colorscale: "YlGnBu",
-            showscale: true,
-          },
-        ]
+        {
+          type: "heatmap",
+          z: daypartStats.weekdayHourMatrix,
+          x: Array.from({ length: 24 }, (_, hour) =>
+            `${hour.toString().padStart(2, "0")}:00`
+          ),
+          y: daypartStats.weekdayLabels,
+          colorscale: "YlGnBu",
+          showscale: true,
+        },
+      ]
       : [];
 
   const acquisitionDailyData =
     userAcquisitionDaily.length > 0
       ? buildUserAcquisitionPlot(userAcquisitionDaily, {
-          showRangeSlider: false,
-          xTickFormat: "%m-%d",
-        })
+        showRangeSlider: false,
+        xTickFormat: "%m-%d",
+      })
       : null;
 
   const acquisitionMonthlyData =
     userAcquisitionMonthly.length > 0
       ? buildUserAcquisitionPlot(userAcquisitionMonthly, {
-          showRangeSlider: false,
-          xTickFormat: "%Y-%m",
-        })
+        showRangeSlider: false,
+        xTickFormat: "%Y-%m",
+      })
       : null;
 
   const scanDailyStats = computeVolumeStats(scanVolumeDaily);
@@ -919,12 +1094,12 @@ function AllProjectsPage({
             <label className="field-label">Start Date</label>
             <input
               type="date"
-              value={format(dateRange.start, "yyyy-MM-dd")}
-              max={format(dateRange.end, "yyyy-MM-dd")}
+              value={format(localDateRange.start, "yyyy-MM-dd")}
+              max={format(localDateRange.end, "yyyy-MM-dd")}
               onChange={(event) => {
                 const next = new Date(`${event.target.value}T00:00:00`);
                 if (!isNaN(next.getTime())) {
-                  setDateRange({ ...dateRange, start: next });
+                  setLocalDateRange({ ...localDateRange, start: next });
                 }
               }}
             />
@@ -933,18 +1108,40 @@ function AllProjectsPage({
             <label className="field-label">End Date</label>
             <input
               type="date"
-              value={format(dateRange.end, "yyyy-MM-dd")}
-              min={format(dateRange.start, "yyyy-MM-dd")}
+              value={format(localDateRange.end, "yyyy-MM-dd")}
+              min={format(localDateRange.start, "yyyy-MM-dd")}
               onChange={(event) => {
                 const next = new Date(`${event.target.value}T23:59:59`);
                 if (!isNaN(next.getTime())) {
-                  setDateRange({ ...dateRange, end: next });
+                  setLocalDateRange({ ...localDateRange, end: next });
                 }
               }}
             />
           </div>
+          <div style={{ display: "flex", alignItems: "flex-end" }}>
+            <button
+              type="button"
+              className="primary"
+              onClick={handleQuery}
+              disabled={isLoading}
+            >
+              {isLoading ? "載入中..." : "Query"}
+            </button>
+          </div>
         </div>
       </section>
+      {isLoading && (
+        <div className="loading-overlay">
+          <div className="loading-spinner" />
+          <p>正在計算數據...</p>
+        </div>
+      )}
+
+      {/* --- Selected Period Analysis --- */}
+      <div className="section-divider">
+        <h2 className="section-divider__title">Selected Period Analysis (受選定區間影響)</h2>
+        <p className="section-divider__desc">以下圖表數據會隨上方日期篩選變動</p>
+      </div>
 
       <section>
         <SectionTitle title="Key Metrics" />
@@ -959,29 +1156,73 @@ function AllProjectsPage({
       </section>
 
       <section>
-        <SectionTitle title="Project Query" />
-        <div className="chart-grid chart-grid--two-thirds">
-          <div className="panel panel--surface">
-            <h3 className="panel__title">Daily Scan Trend ({dateRangeLabel})</h3>
-            <Plot
-              data={dailyData}
-              layout={{
-                autosize: true,
-                margin: { l: 60, r: 20, t: 20, b: 50 },
-                xaxis: {
-                  title: { text: "Date" },
-                  type: "date",
-                  tickformat: "%Y-%m-%d",
-                },
-                yaxis: { title: { text: "Scans" } },
-                paper_bgcolor: "transparent",
-                plot_bgcolor: "transparent",
-              }}
-              style={{ width: "100%", height: "360px" }}
-              useResizeHandler
-              config={{ displayModeBar: false }}
-            />
-          </div>
+        <SectionTitle title="Daily Scan Trend" />
+        <div className="panel panel--surface">
+          <h3 className="panel__title">Daily Scan Trend ({dateRangeLabel})</h3>
+          <Plot
+            data={dailyTrendData}
+            onClick={handleDailyChartClick}
+            layout={{
+              autosize: true,
+              margin: { l: 60, r: 80, t: 20, b: 50 },
+              xaxis: {
+                title: { text: "Date" },
+                type: "date",
+                tickformat: "%Y-%m-%d",
+              },
+              yaxis: { title: { text: "Volume" } },
+              yaxis2: {
+                title: { text: "Cumulative Scans" },
+                overlaying: "y",
+                side: "right",
+                rangemode: "tozero",
+              },
+              paper_bgcolor: "transparent",
+              plot_bgcolor: "transparent",
+              legend: { orientation: "h", y: 1.1, yanchor: "bottom" },
+              barmode: "stack",
+            }}
+            style={{ width: "100%", height: "360px" }}
+            useResizeHandler
+            config={{ displayModeBar: false }}
+          />
+          {selectedDate && (
+            <div className="mt-4 border-t pt-4">
+              <h4 className="text-lg font-semibold mb-2" style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 600 }}>
+                Project Breakdown for {format(selectedDate, "yyyy-MM-dd")}
+              </h4>
+              {selectedDateStats.length === 0 ? (
+                <p>No activity recorded for this date.</p>
+              ) : (
+                <div className="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Project Name</th>
+                        <th>Clicks</th>
+                        <th>Scans</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedDateStats.map((stat) => (
+                        <tr key={stat.projectId}>
+                          <td>{stat.projectName}</td>
+                          <td>{stat.clicks.toLocaleString()}</td>
+                          <td>{stat.scans.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section>
+        <SectionTitle title="Geo Heat Map" />
+        <div className="chart-grid">
           <div className="panel panel--surface">
             <h3 className="panel__title">Geo Heat Map ({dateRangeLabel})</h3>
             <Plot
@@ -992,8 +1233,6 @@ function AllProjectsPage({
                   scope: "asia",
                   projection: { type: "mercator" },
                   center: { lat: 23.6978, lon: 120.96 },
-                  lonaxis: { range: [116, 123] },
-                  lataxis: { range: [21, 26] },
                   showframe: false,
                   showcoastlines: true,
                 },
@@ -1001,11 +1240,268 @@ function AllProjectsPage({
                 paper_bgcolor: "transparent",
                 plot_bgcolor: "transparent",
               }}
-              style={{ width: "100%", height: "360px" }}
+              style={{ width: "100%", height: "480px" }}
               useResizeHandler
-              config={{ displayModeBar: false }}
+              config={{ displayModeBar: true, scrollZoom: true }}
             />
           </div>
+        </div>
+      </section>
+
+      <section>
+        <SectionTitle title="Project Funnels" />
+        <div className="panel panel--surface">
+          {projectFunnelRows.length === 0 ? (
+            <p>暫無符合條件的專案漏斗資料。</p>
+          ) : (
+            <ProjectFunnelTable rows={projectFunnelRows} />
+          )}
+        </div>
+      </section>
+
+      <section>
+        <SectionTitle title="Activity & Scene Stats" />
+        <div className="chart-grid">
+          <div className="panel panel--surface">
+            <h3 className="panel__title">活動新增用戶 ({dateRangeLabel})</h3>
+            {projectUserAcquisition.length === 0 ? (
+              <p>選定期間內沒有可顯示的用戶互動。</p>
+            ) : (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Project</th>
+                      <th>新增用戶</th>
+                      <th>互動用戶</th>
+                      <th>主要場景</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projectUserAcquisition.map((row) => (
+                      <tr key={row.projectId}>
+                        <td>{row.name}</td>
+                        <td>{row.newUsers.toLocaleString()}</td>
+                        <td>{row.activeUsers.toLocaleString()}</td>
+                        <td>
+                          {row.topSceneName
+                            ? `${row.topSceneName} (${row.topSceneNewUsers})`
+                            : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <div className="panel panel--surface">
+            <h3 className="panel__title">場景用戶統計 ({dateRangeLabel})</h3>
+            {sceneUserStats.length === 0 ? (
+              <p>選定期間內沒有可顯示的場景互動。</p>
+            ) : (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Scene</th>
+                      <th>新增用戶</th>
+                      <th>互動用戶</th>
+                      <th>關聯活動</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sceneUserStats.slice(0, 50).map((row) => (
+                      <tr key={row.sceneId}>
+                        <td>{row.sceneName}</td>
+                        <td>{row.newUsers.toLocaleString()}</td>
+                        <td>{row.activeUsers.toLocaleString()}</td>
+                        <td>
+                          {row.projectNames.length
+                            ? row.projectNames.join("、")
+                            : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+
+      <SessionIntelligenceSection sessionAnalytics={sessionAnalytics} />
+
+      <section>
+        <SectionTitle title="Object Interaction Ranking" />
+        <div className="panel panel--surface">
+          <h3 className="panel__title">Object Interaction Ranking ({dateRangeLabel})</h3>
+          {clickRanking.length === 0 ? (
+            <p>選定期間內沒有物件互動紀錄。</p>
+          ) : (
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>AR Object</th>
+                    <th>Scene</th>
+                    <th>Clicks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {clickRanking.map((item) => (
+                    <tr key={item.objId}>
+                      <td>{item.name}</td>
+                      <td>{item.sceneName ?? "-"}</td>
+                      <td>{item.count.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* --- Long-term Trends & Benchmarks --- */}
+      <div className="section-divider">
+        <h2 className="section-divider__title">Long-term Trends & Benchmarks (固定區間/長期趨勢)</h2>
+        <p className="section-divider__desc">以下圖表顯示固定區間（如近 30 天、近 12 個月），不受上方日期篩選影響</p>
+      </div>
+
+      <section>
+        <SectionTitle title="Volume Trends (Fixed Range)" />
+        <div className="panel panel--surface">
+          <h3 className="panel__title">最近 30 天（日）</h3>
+          {scanVolumeDaily.length > 0 && clickVolumeDaily.length > 0 ? (
+            <Plot
+              data={scanVolumeDailyData}
+              layout={{
+                autosize: true,
+                margin: { l: 60, r: 80, t: 20, b: 50 },
+                xaxis: { title: { text: "Date" }, type: "date", tickformat: "%m-%d" },
+                yaxis: { title: { text: "Volume" }, rangemode: "tozero" },
+                yaxis2: {
+                  title: { text: "Cumulative Scans" },
+                  overlaying: "y",
+                  side: "right",
+                  rangemode: "tozero",
+                },
+                paper_bgcolor: "transparent",
+                plot_bgcolor: "transparent",
+                legend: { orientation: "h", y: 1.1, yanchor: "bottom" },
+                barmode: "stack",
+              }}
+              style={{ width: "100%", height: "360px" }}
+              config={{ displayModeBar: false }}
+              useResizeHandler
+            />
+          ) : (
+            <p>沒有足夠的資料可用來繪製最近 30 天趨勢。</p>
+          )}
+          {scanDailyStats && clickDailyStats && (
+            <div className="volume-summary">
+              <div className="volume-summary__item">
+                <span>Scans Peak</span>
+                <strong>
+                  {scanDailyStats.peakValue.toLocaleString()} (
+                  {format(scanDailyStats.peakDate, "MM-dd")})
+                </strong>
+                <span>Avg {scanDailyStats.avg.toLocaleString()}</span>
+              </div>
+              <div className="volume-summary__item volume-summary__item--accent">
+                <span>Clicks Peak</span>
+                <strong>
+                  {clickDailyStats.peakValue.toLocaleString()} (
+                  {format(clickDailyStats.peakDate, "MM-dd")})
+                </strong>
+                <span>Avg {clickDailyStats.avg.toLocaleString()}</span>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="panel panel--surface">
+          <h3 className="panel__title">近 12 個月（月）</h3>
+          {scanVolumeMonthly.length > 0 && clickVolumeMonthly.length > 0 ? (
+            <Plot
+              data={scanVolumeMonthlyData}
+              layout={{
+                autosize: true,
+                margin: { l: 60, r: 80, t: 20, b: 50 },
+                xaxis: { title: { text: "Month" }, type: "date", tickformat: "%Y-%m" },
+                yaxis: { title: { text: "Volume" }, rangemode: "tozero" },
+                yaxis2: {
+                  title: { text: "Cumulative Scans" },
+                  overlaying: "y",
+                  side: "right",
+                  rangemode: "tozero",
+                },
+                paper_bgcolor: "transparent",
+                plot_bgcolor: "transparent",
+                legend: { orientation: "h", y: 1.1, yanchor: "bottom" },
+                barmode: "stack",
+              }}
+              style={{ width: "100%", height: "360px" }}
+              config={{ displayModeBar: false }}
+              useResizeHandler
+            />
+          ) : (
+            <p>沒有足夠的資料可用來繪製月度趨勢。</p>
+          )}
+          {scanMonthlyStats && clickMonthlyStats && (
+            <div className="volume-summary">
+              <div className="volume-summary__item">
+                <span>Scans Peak</span>
+                <strong>
+                  {scanMonthlyStats.peakValue.toLocaleString()} (
+                  {format(scanMonthlyStats.peakDate, "yyyy-MM")})
+                </strong>
+                <span>Avg {scanMonthlyStats.avg.toLocaleString()}</span>
+              </div>
+              <div className="volume-summary__item volume-summary__item--accent">
+                <span>Clicks Peak</span>
+                <strong>
+                  {clickMonthlyStats.peakValue.toLocaleString()} (
+                  {format(clickMonthlyStats.peakDate, "yyyy-MM")})
+                </strong>
+                <span>Avg {clickMonthlyStats.avg.toLocaleString()}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section>
+        <SectionTitle title="User Acquisition Trends" />
+        <div className="panel panel--surface">
+          <h3 className="panel__title">最近 30 天（日）</h3>
+          {acquisitionDailyData ? (
+            <Plot
+              data={acquisitionDailyData.data}
+              layout={acquisitionDailyData.layout}
+              style={{ width: "100%", height: "420px" }}
+              config={{ displayModeBar: true }}
+              useResizeHandler
+            />
+          ) : (
+            <p>沒有足夠的互動資料可用來繪製最近 30 天趨勢。</p>
+          )}
+        </div>
+        <div className="panel panel--surface">
+          <h3 className="panel__title">全期間（月）</h3>
+          {acquisitionMonthlyData ? (
+            <Plot
+              data={acquisitionMonthlyData.data}
+              layout={acquisitionMonthlyData.layout}
+              style={{ width: "100%", height: "420px" }}
+              config={{ displayModeBar: true }}
+              useResizeHandler
+            />
+          ) : (
+            <p>沒有足夠的互動資料可用來繪製月度趨勢。</p>
+          )}
         </div>
       </section>
 
@@ -1044,138 +1540,35 @@ function AllProjectsPage({
       </section>
 
       <section>
-        <SectionTitle title="Scan & Click Volume" />
-        <div className="chart-grid">
-          <div className="panel panel--surface">
-            <h3 className="panel__title">最近 30 天（日）</h3>
-            {scanVolumeDaily.length > 0 && clickVolumeDaily.length > 0 ? (
-              <Plot
-                data={[
-                  {
-                    type: "scatter",
-                    mode: "lines+markers" as any,
-                    name: "Scans",
-                    x: scanVolumeDaily.map((point) => point.date.toISOString()),
-                    y: scanVolumeDaily.map((point) => point.total),
-                    marker: { color: "#2ca02c", size: 6 },
-                    line: { width: 3 },
-                  },
-                  {
-                    type: "scatter",
-                    mode: "lines+markers" as any,
-                    name: "Clicks",
-                    x: clickVolumeDaily.map((point) => point.date.toISOString()),
-                    y: clickVolumeDaily.map((point) => point.total),
-                    marker: { color: "#ff7f0e", size: 6 },
-                    line: { width: 3 },
-                  },
-                ]}
-                layout={{
-                  autosize: true,
-                  margin: { l: 60, r: 20, t: 20, b: 50 },
-                  xaxis: { title: { text: "Date" }, type: "date", tickformat: "%m-%d" },
-                  yaxis: { title: { text: "Volume" }, rangemode: "tozero" },
-                  paper_bgcolor: "transparent",
-                  plot_bgcolor: "transparent",
-                  legend: { orientation: "h" },
-                }}
-                style={{ width: "100%", height: "420px" }}
-                config={{ displayModeBar: false }}
-                useResizeHandler
-              />
-            ) : (
-              <p>沒有足夠的資料可用來繪製最近 30 天趨勢。</p>
-            )}
-            {scanDailyStats && clickDailyStats && (
-              <div className="volume-summary">
-                <div className="volume-summary__item">
-                  <span>Scans Peak</span>
-                  <strong>
-                    {scanDailyStats.peakValue.toLocaleString()} (
-                    {format(scanDailyStats.peakDate, "MM-dd")})
-                  </strong>
-                  <span>Avg {scanDailyStats.avg.toLocaleString()}</span>
-                </div>
-                <div className="volume-summary__item volume-summary__item--accent">
-                  <span>Clicks Peak</span>
-                  <strong>
-                    {clickDailyStats.peakValue.toLocaleString()} (
-                    {format(clickDailyStats.peakDate, "MM-dd")})
-                  </strong>
-                  <span>Avg {clickDailyStats.avg.toLocaleString()}</span>
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="panel panel--surface">
-            <h3 className="panel__title">近 12 個月（月）</h3>
-            {scanVolumeMonthly.length > 0 && clickVolumeMonthly.length > 0 ? (
-              <Plot
-                data={[
-                  {
-                    type: "scatter",
-                    mode: "lines+markers" as any,
-                    name: "Scans",
-                    x: scanVolumeMonthly.map((point) => point.month.toISOString()),
-                    y: scanVolumeMonthly.map((point) => point.total),
-                    marker: { color: "#17becf", size: 6 },
-                    line: { width: 3 },
-                  },
-                  {
-                    type: "scatter",
-                    mode: "lines+markers" as any,
-                    name: "Clicks",
-                    x: clickVolumeMonthly.map((point) => point.month.toISOString()),
-                    y: clickVolumeMonthly.map((point) => point.total),
-                    marker: { color: "#f59e0b", size: 6 },
-                    line: { width: 3 },
-                  },
-                ]}
-                layout={{
-                  autosize: true,
-                  margin: { l: 60, r: 20, t: 20, b: 50 },
-                  xaxis: { title: { text: "Month" }, type: "date", tickformat: "%Y-%m" },
-                  yaxis: { title: { text: "Volume" }, rangemode: "tozero" },
-                  paper_bgcolor: "transparent",
-                  plot_bgcolor: "transparent",
-                  legend: { orientation: "h" },
-                }}
-                style={{ width: "100%", height: "420px" }}
-                config={{ displayModeBar: false }}
-                useResizeHandler
-              />
-            ) : (
-              <p>沒有足夠的資料可用來繪製月度趨勢。</p>
-            )}
-            {scanMonthlyStats && clickMonthlyStats && (
-              <div className="volume-summary">
-                <div className="volume-summary__item">
-                  <span>Scans Peak</span>
-                  <strong>
-                    {scanMonthlyStats.peakValue.toLocaleString()} (
-                    {format(scanMonthlyStats.peakDate, "yyyy-MM")})
-                  </strong>
-                  <span>Avg {scanMonthlyStats.avg.toLocaleString()}</span>
-                </div>
-                <div className="volume-summary__item volume-summary__item--accent">
-                  <span>Clicks Peak</span>
-                  <strong>
-                    {clickMonthlyStats.peakValue.toLocaleString()} (
-                    {format(clickMonthlyStats.peakDate, "yyyy-MM")})
-                  </strong>
-                  <span>Avg {clickMonthlyStats.avg.toLocaleString()}</span>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <SessionIntelligenceSection sessionAnalytics={sessionAnalytics} />
-
-      <section>
         <SectionTitle title="Object Engagement & CTR" />
-        <div className="chart-grid">
+        <div className="chart-grid" style={{ gridTemplateColumns: "1fr" }}>
+          <div className="panel panel--surface">
+            <h3 className="panel__title">Global Click Density</h3>
+            {clickHeatmapPoints.length === 0 ? (
+              <p>尚無地理資訊可顯示。</p>
+            ) : (
+              <Plot
+                data={clickHeatmapData}
+                layout={{
+                  autosize: true,
+                  geo: {
+                    scope: "world",
+                    projection: { type: "natural earth" },
+                    showland: true,
+                    landcolor: "#f5f5f5",
+                    showcountries: true,
+                    countrycolor: "#bcbcbc",
+                  },
+                  margin: { l: 0, r: 0, t: 0, b: 0 },
+                  paper_bgcolor: "transparent",
+                  plot_bgcolor: "transparent",
+                }}
+                style={{ width: "100%", height: "420px" }}
+                config={{ displayModeBar: false }}
+                useResizeHandler
+              />
+            )}
+          </div>
           <div className="panel panel--surface">
             <h3 className="panel__title">Top AR Objects（近 30 天）</h3>
             {objectMetrics.length === 0 ? (
@@ -1219,28 +1612,49 @@ function AllProjectsPage({
               </div>
             )}
           </div>
+        </div>
+      </section>
+
+      <section>
+        <SectionTitle title="Click Dayparting & Timing" />
+        <div className="chart-grid">
           <div className="panel panel--surface">
-            <h3 className="panel__title">Global Click Density</h3>
-            {clickHeatmapPoints.length === 0 ? (
-              <p>尚無地理資訊可顯示。</p>
+            <h3 className="panel__title">Hourly Trend (Last 30 Days)</h3>
+            {!daypartStats ? (
+              <p>尚無足夠資料。</p>
             ) : (
               <Plot
-                data={clickHeatmapData}
+                data={hourlyTrendData}
                 layout={{
                   autosize: true,
-                  geo: {
-                    scope: "world",
-                    projection: { type: "natural earth" },
-                    showland: true,
-                    landcolor: "#f5f5f5",
-                    showcountries: true,
-                    countrycolor: "#bcbcbc",
-                  },
-                  margin: { l: 0, r: 0, t: 0, b: 0 },
+                  margin: { l: 60, r: 20, t: 20, b: 50 },
+                  xaxis: { title: { text: "Hour" } },
+                  yaxis: { title: { text: "Clicks" }, rangemode: "tozero" },
                   paper_bgcolor: "transparent",
                   plot_bgcolor: "transparent",
                 }}
-                style={{ width: "100%", height: "420px" }}
+                style={{ width: "100%", height: "360px" }}
+                config={{ displayModeBar: false }}
+                useResizeHandler
+              />
+            )}
+          </div>
+          <div className="panel panel--surface">
+            <h3 className="panel__title">Weekday x Hour Heatmap (Last 30 Days)</h3>
+            {!daypartStats ? (
+              <p>尚無足夠資料。</p>
+            ) : (
+              <Plot
+                data={daypartHeatmapData}
+                layout={{
+                  autosize: true,
+                  margin: { l: 60, r: 20, t: 20, b: 50 },
+                  paper_bgcolor: "transparent",
+                  plot_bgcolor: "transparent",
+                  xaxis: { title: { text: "Hour" } },
+                  yaxis: { title: { text: "Weekday" } },
+                }}
+                style={{ width: "100%", height: "360px" }}
                 config={{ displayModeBar: false }}
                 useResizeHandler
               />
@@ -1281,8 +1695,8 @@ function AllProjectsPage({
                         {row.objectShares.length === 0
                           ? "-"
                           : row.objectShares
-                              .map((item) => `${item.name} (${formatPercent(item.share)})`)
-                              .join("、")}
+                            .map((item) => `${item.name} (${formatPercent(item.share)})`)
+                            .join("、")}
                       </td>
                     </tr>
                   ))}
@@ -1358,92 +1772,6 @@ function AllProjectsPage({
       </section>
 
       <section>
-        <SectionTitle title="Project Funnels" />
-        <div className="panel panel--surface">
-          {projectFunnelRows.length === 0 ? (
-            <p>暫無符合條件的專案漏斗資料。</p>
-          ) : (
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Project</th>
-                    <th>Scans</th>
-                    <th>Clicks</th>
-                    <th>New Users</th>
-                    <th>Active Users</th>
-                    <th>CTR</th>
-                    <th>Activation</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projectFunnelRows.map((row) => (
-                    <tr key={row.projectId}>
-                      <td>{row.projectName}</td>
-                      <td>{row.scans.toLocaleString()}</td>
-                      <td>{row.clicks.toLocaleString()}</td>
-                      <td>{row.newUsers.toLocaleString()}</td>
-                      <td>{row.activeUsers.toLocaleString()}</td>
-                      <td>{formatPercent(row.clickThroughRate)}</td>
-                      <td>{formatPercent(row.activationRate)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section>
-        <SectionTitle title="Click Dayparting & Timing" />
-        <div className="chart-grid">
-          <div className="panel panel--surface">
-            <h3 className="panel__title">Hourly Trend (Last 30 Days)</h3>
-            {!daypartStats ? (
-              <p>尚無足夠資料。</p>
-            ) : (
-              <Plot
-                data={hourlyTrendData}
-                layout={{
-                  autosize: true,
-                  margin: { l: 60, r: 20, t: 20, b: 50 },
-                  xaxis: { title: { text: "Hour" } },
-                  yaxis: { title: { text: "Clicks" }, rangemode: "tozero" },
-                  paper_bgcolor: "transparent",
-                  plot_bgcolor: "transparent",
-                }}
-                style={{ width: "100%", height: "360px" }}
-                config={{ displayModeBar: false }}
-                useResizeHandler
-              />
-            )}
-          </div>
-          <div className="panel panel--surface">
-            <h3 className="panel__title">Weekday × Hour Heatmap</h3>
-            {!daypartStats ? (
-              <p>尚無足夠資料。</p>
-            ) : (
-              <Plot
-                data={daypartHeatmapData}
-                layout={{
-                  autosize: true,
-                  margin: { l: 60, r: 20, t: 20, b: 50 },
-                  paper_bgcolor: "transparent",
-                  plot_bgcolor: "transparent",
-                  xaxis: { title: { text: "Hour" } },
-                  yaxis: { title: { text: "Weekday" } },
-                }}
-                style={{ width: "100%", height: "360px" }}
-                config={{ displayModeBar: false }}
-                useResizeHandler
-              />
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section>
         <SectionTitle title="Content Attribution — Top Objects by Project" />
         <div className="panel panel--surface">
           {projectObjectAttribution.length === 0 ? (
@@ -1477,118 +1805,6 @@ function AllProjectsPage({
         </div>
       </section>
 
-      <section>
-        <SectionTitle title="User Acquisition" />
-        <div className="chart-grid">
-          <div className="panel panel--surface">
-            <h3 className="panel__title">最近 30 天（日）</h3>
-            {acquisitionDailyData ? (
-              <Plot
-                data={acquisitionDailyData.data}
-                layout={acquisitionDailyData.layout}
-                style={{ width: "100%", height: "420px" }}
-                config={{ displayModeBar: true }}
-                useResizeHandler
-              />
-            ) : (
-              <p>沒有足夠的互動資料可用來繪製最近 30 天趨勢。</p>
-            )}
-          </div>
-          <div className="panel panel--surface">
-            <h3 className="panel__title">全期間（月）</h3>
-            {acquisitionMonthlyData ? (
-              <Plot
-                data={acquisitionMonthlyData.data}
-                layout={acquisitionMonthlyData.layout}
-                style={{ width: "100%", height: "420px" }}
-                config={{ displayModeBar: true }}
-                useResizeHandler
-              />
-            ) : (
-              <p>沒有足夠的互動資料可用來繪製月度趨勢。</p>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <SectionTitle title="活動新增用戶" />
-        <div className="panel panel--surface">
-          <h3 className="panel__title">活動新增用戶 ({dateRangeLabel})</h3>
-          {projectUserAcquisition.length === 0 ? (
-            <p>選定期間內沒有可顯示的用戶互動。</p>
-          ) : (
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Project</th>
-                    <th>新增用戶</th>
-                    <th>互動用戶</th>
-                    <th>主要場景</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projectUserAcquisition.map((row) => (
-                    <tr key={row.projectId}>
-                      <td>{row.name}</td>
-                      <td>{row.newUsers.toLocaleString()}</td>
-                      <td>{row.activeUsers.toLocaleString()}</td>
-                      <td>
-                        {row.topSceneName
-                          ? `${row.topSceneName} (${row.topSceneNewUsers})`
-                          : "-"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section>
-        <SectionTitle title="場景用戶統計" />
-        <div className="panel panel--surface">
-          <h3 className="panel__title">場景用戶統計 ({dateRangeLabel})</h3>
-          {sceneUserStats.length === 0 ? (
-            <p>選定期間內沒有可顯示的場景互動。</p>
-          ) : (
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Scene</th>
-                    <th>新增用戶</th>
-                    <th>互動用戶</th>
-                    <th>關聯活動</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sceneUserStats.slice(0, 50).map((row) => (
-                    <tr key={row.sceneId}>
-                      <td>{row.sceneName}</td>
-                      <td>{row.newUsers.toLocaleString()}</td>
-                      <td>{row.activeUsers.toLocaleString()}</td>
-                      <td>
-                        {row.projectNames.length
-                          ? row.projectNames.join("、")
-                          : "-"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {sceneUserStats.length > 50 && (
-                <p className="table-footnote">
-                  僅顯示前 50 筆，可縮小日期或篩選帳號以查看更多資料。
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      </section>
 
       <section>
         <SectionTitle title="Project Ranking (by Scan Count)" />
@@ -1646,36 +1862,6 @@ function AllProjectsPage({
         </div>
       </section>
 
-      <section>
-        <SectionTitle title="Object Interaction Ranking" />
-        <div className="panel panel--surface">
-          <h3 className="panel__title">Object Interaction Ranking ({dateRangeLabel})</h3>
-          {clickRanking.length === 0 ? (
-            <p>選定期間內沒有物件互動紀錄。</p>
-          ) : (
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>AR Object</th>
-                    <th>Scene</th>
-                    <th>Clicks</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {clickRanking.map((item) => (
-                    <tr key={item.objId}>
-                      <td>{item.name}</td>
-                      <td>{item.sceneName ?? "-"}</td>
-                      <td>{item.count.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </section>
     </>
   );
 }
@@ -1750,6 +1936,30 @@ function ProjectDetailPage({
   const scenesCount = project?.scenes.length ?? 0;
   const lightsCount = project?.lightIds.length ?? 0;
 
+  const cumulativeDaily = useMemo(() => {
+    let sum = 0;
+    return dailySeries.map((p) => {
+      sum += p.total;
+      return sum;
+    });
+  }, [dailySeries]);
+
+  const cumulativeVolumeDaily = useMemo(() => {
+    let sum = 0;
+    return scanVolumeDaily.map((p) => {
+      sum += p.total;
+      return sum;
+    });
+  }, [scanVolumeDaily]);
+
+  const cumulativeVolumeMonthly = useMemo(() => {
+    let sum = 0;
+    return scanVolumeMonthly.map((p) => {
+      sum += p.total;
+      return sum;
+    });
+  }, [scanVolumeMonthly]);
+
   const dailyHistogramData: Partial<Data>[] = [
     {
       type: "bar",
@@ -1757,6 +1967,15 @@ function ProjectDetailPage({
       y: dailySeries.map((point) => point.total),
       marker: { color: "#1f77b4" },
       name: "Scans",
+    },
+    {
+      type: "scatter",
+      mode: "lines",
+      x: dailySeries.map((point) => point.date.toISOString()),
+      y: cumulativeDaily,
+      yaxis: "y2",
+      line: { color: "#ff7f0e", width: 2 },
+      name: "Cumulative",
     },
   ];
 
@@ -1768,6 +1987,15 @@ function ProjectDetailPage({
       marker: { color: "#2ca02c" },
       name: "Scans",
     },
+    {
+      type: "scatter",
+      mode: "lines",
+      x: scanVolumeDaily.map((point) => point.date.toISOString()),
+      y: cumulativeVolumeDaily,
+      yaxis: "y2",
+      line: { color: "#ff7f0e", width: 2 },
+      name: "Cumulative",
+    },
   ];
 
   const scanVolumeMonthlyData: Partial<Data>[] = [
@@ -1778,22 +2006,31 @@ function ProjectDetailPage({
       marker: { color: "#17becf" },
       name: "Scans",
     },
+    {
+      type: "scatter",
+      mode: "lines",
+      x: scanVolumeMonthly.map((point) => point.month.toISOString()),
+      y: cumulativeVolumeMonthly,
+      yaxis: "y2",
+      line: { color: "#ff7f0e", width: 2 },
+      name: "Cumulative",
+    },
   ];
 
   const acquisitionDailyData =
     userAcquisitionDaily.length > 0
       ? buildUserAcquisitionPlot(userAcquisitionDaily, {
-          showRangeSlider: false,
-          xTickFormat: "%m-%d",
-        })
+        showRangeSlider: false,
+        xTickFormat: "%m-%d",
+      })
       : null;
 
   const acquisitionMonthlyData =
     userAcquisitionMonthly.length > 0
       ? buildUserAcquisitionPlot(userAcquisitionMonthly, {
-          showRangeSlider: false,
-          xTickFormat: "%Y-%m",
-        })
+        showRangeSlider: false,
+        xTickFormat: "%Y-%m",
+      })
       : null;
 
   const formatDateSafe = (value: Date | null) =>
@@ -2072,28 +2309,36 @@ function ProjectDetailPage({
 
       <section>
         <SectionTitle title="Scan Analytics" />
+        <div className="panel panel--surface" style={{ marginBottom: "1rem" }}>
+          <h3 className="panel__title">Daily Scan Trend ({dateRangeLabel})</h3>
+          <Plot
+            data={dailyHistogramData}
+            layout={{
+              autosize: true,
+              margin: { l: 60, r: 20, t: 20, b: 50 },
+              xaxis: {
+                title: { text: "Date" },
+                type: "date",
+                tickformat: "%Y-%m-%d",
+              },
+              yaxis: { title: { text: "Scans" }, rangemode: "tozero" },
+              yaxis2: {
+                title: { text: "Cumulative Scans" },
+                overlaying: "y",
+                side: "right",
+                showgrid: false,
+                rangemode: "tozero",
+              },
+              legend: { orientation: "h", x: 0.5, xanchor: "center", y: 1.1 },
+              paper_bgcolor: "transparent",
+              plot_bgcolor: "transparent",
+            }}
+            style={{ width: "100%", height: "360px" }}
+            useResizeHandler
+            config={{ displayModeBar: false }}
+          />
+        </div>
         <div className="chart-grid">
-          <div className="panel panel--surface">
-            <h3 className="panel__title">Daily Scan Trend ({dateRangeLabel})</h3>
-            <Plot
-              data={dailyHistogramData}
-              layout={{
-                autosize: true,
-                margin: { l: 60, r: 20, t: 20, b: 50 },
-                xaxis: {
-                  title: { text: "Date" },
-                  type: "date",
-                  tickformat: "%Y-%m-%d",
-                },
-                yaxis: { title: { text: "Scans" }, rangemode: "tozero" },
-                paper_bgcolor: "transparent",
-                plot_bgcolor: "transparent",
-              }}
-              style={{ width: "100%", height: "360px" }}
-              useResizeHandler
-              config={{ displayModeBar: false }}
-            />
-          </div>
           <div className="panel panel--surface">
             <h3 className="panel__title">最近 30 天（日）</h3>
             {scanVolumeDaily.length > 0 ? (
@@ -2108,6 +2353,14 @@ function ProjectDetailPage({
                     tickformat: "%m-%d",
                   },
                   yaxis: { title: { text: "Scans" }, rangemode: "tozero" },
+                  yaxis2: {
+                    title: { text: "Cumulative" },
+                    overlaying: "y",
+                    side: "right",
+                    showgrid: false,
+                    rangemode: "tozero",
+                  },
+                  legend: { orientation: "h", x: 0.5, xanchor: "center", y: 1.1 },
                   paper_bgcolor: "transparent",
                   plot_bgcolor: "transparent",
                 }}
@@ -2133,6 +2386,14 @@ function ProjectDetailPage({
                     tickformat: "%Y-%m",
                   },
                   yaxis: { title: { text: "Scans" }, rangemode: "tozero" },
+                  yaxis2: {
+                    title: { text: "Cumulative" },
+                    overlaying: "y",
+                    side: "right",
+                    showgrid: false,
+                    rangemode: "tozero",
+                  },
+                  legend: { orientation: "h", x: 0.5, xanchor: "center", y: 1.1 },
                   paper_bgcolor: "transparent",
                   plot_bgcolor: "transparent",
                 }}
@@ -2144,6 +2405,7 @@ function ProjectDetailPage({
               <p>沒有足夠的掃描資料。</p>
             )}
           </div>
+
         </div>
       </section>
 
@@ -2728,57 +2990,57 @@ function BigScreenPage({
                 <div className="big-panel__title">Project Focus</div>
                 <div className="table-wrapper">
                   <table>
-                <thead>
-                  <tr>
-                    <th>Project</th>
-                    <th>Total Scans</th>
-                    <th>New Users (30d)</th>
-                    <th>Months</th>
-                    <th>Weeks</th>
-                    <th>Days</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projectAnalysisRows.map((row) => (
-                    <tr key={row.name}>
-                      <td>{row.name}</td>
-                      <td>{row.total.toLocaleString()}</td>
-                      <td>{row.newUsers.toLocaleString()}</td>
-                      <td>{row.month.toLocaleString()}</td>
-                      <td>{row.week.toLocaleString()}</td>
-                      <td>{row.day.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                    <thead>
+                      <tr>
+                        <th>Project</th>
+                        <th>Total Scans</th>
+                        <th>New Users (30d)</th>
+                        <th>Months</th>
+                        <th>Weeks</th>
+                        <th>Days</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {projectAnalysisRows.map((row) => (
+                        <tr key={row.name}>
+                          <td>{row.name}</td>
+                          <td>{row.total.toLocaleString()}</td>
+                          <td>{row.newUsers.toLocaleString()}</td>
+                          <td>{row.month.toLocaleString()}</td>
+                          <td>{row.week.toLocaleString()}</td>
+                          <td>{row.day.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
 
-          <div className="big-panel">
-            <div className="big-panel__title">Top 10 Clicked AR Objects (30d)</div>
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>AR Object</th>
-                    <th>Project</th>
-                    <th>Clicks</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {topObjectRows.map((row) => (
-                    <tr key={row.objId}>
-                      <td>{row.name}</td>
-                      <td>{row.projectNames || "-"}</td>
-                      <td>{row.count.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+              <div className="big-panel">
+                <div className="big-panel__title">Top 10 Clicked AR Objects (30d)</div>
+                <div className="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>AR Object</th>
+                        <th>Project</th>
+                        <th>Clicks</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {topObjectRows.map((row) => (
+                        <tr key={row.objId}>
+                          <td>{row.name}</td>
+                          <td>{row.projectNames || "-"}</td>
+                          <td>{row.count.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
         </section>
       </div>
     </div>
@@ -2830,6 +3092,15 @@ function sortAirtableProjects(items: AirtableProject[]): AirtableProject[] {
     if (diff !== 0) return diff;
     return a.projectName.localeCompare(b.projectName, undefined, { sensitivity: "base" });
   });
+}
+
+function computeNextProjectId(projects: AirtableProject[]): string {
+  if (projects.length === 0) return "1";
+  const maxId = projects.reduce((max, p) => {
+    const num = toProjectIdNumber(p.projectId);
+    return num > max ? num : max;
+  }, 0);
+  return String(maxId + 1);
 }
 
 function SettingsPage({
@@ -4068,9 +4339,9 @@ function buildClickGeoData(
     const owners = arObjectProjectMap.get(item.objId);
     const projectNames = owners
       ? Array.from(owners)
-          .map((id) => data.projectById[id]?.name)
-          .filter(Boolean)
-          .join("、")
+        .map((id) => data.projectById[id]?.name)
+        .filter(Boolean)
+        .join("、")
       : "";
     return {
       ...item,

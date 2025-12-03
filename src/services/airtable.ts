@@ -1,9 +1,3 @@
-const AIRTABLE_PAT = import.meta.env.VITE_AIRTABLE_PAT;
-const AIRTABLE_BASE_ID = import.meta.env.VITE_AIRTABLE_BASE_ID;
-const AIRTABLE_PROJECT_TABLE = import.meta.env.VITE_AIRTABLE_EVENTS_TABLE;
-const AIRTABLE_PROJECT_SORT_FIELD =
-  import.meta.env.VITE_AIRTABLE_EVENTS_SORT_FIELD?.trim() || "";
-
 const FIELD_PROJECT_ID =
   import.meta.env.VITE_AIRTABLE_EVENTS_FIELD_EVENT_ID?.trim() || "ProjectID";
 const FIELD_NAME =
@@ -48,23 +42,6 @@ interface AirtableRecord<T> {
 
 interface ProjectFields {
   [key: string]: string | number | boolean | null | undefined;
-}
-
-function assertEnv() {
-  if (!AIRTABLE_PAT || !AIRTABLE_BASE_ID || !AIRTABLE_PROJECT_TABLE) {
-    throw new Error(
-      "缺少 Airtable 設定，請在 .env.local 設定 VITE_AIRTABLE_PAT、VITE_AIRTABLE_BASE_ID、VITE_AIRTABLE_EVENTS_TABLE"
-    );
-  }
-}
-
-function buildUrl(path = ""): string {
-  const table = encodeURIComponent(AIRTABLE_PROJECT_TABLE ?? "");
-  let base = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${table}`;
-  if (path) {
-    base += `/${path}`;
-  }
-  return base;
 }
 
 function coerceString(value: unknown): string | null {
@@ -126,28 +103,16 @@ function mapRecord(record: AirtableRecord<ProjectFields>): AirtableProject {
 }
 
 export async function fetchProjects(): Promise<AirtableProject[]> {
-  assertEnv();
-  const url = new URL(buildUrl());
-  url.searchParams.set("pageSize", "100");
-  if (AIRTABLE_PROJECT_SORT_FIELD) {
-    url.searchParams.set("sort[0][field]", AIRTABLE_PROJECT_SORT_FIELD);
-  }
-
-  const response = await fetch(url.toString(), {
-    headers: {
-      Authorization: `Bearer ${AIRTABLE_PAT}`,
-    },
-  });
+  const response = await fetch("/api/projects");
 
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`讀取專案資料失敗：${response.status} ${text}`);
   }
 
-  const json = (await response.json()) as {
-    records: AirtableRecord<ProjectFields>[];
-  };
-  return json.records.map(mapRecord);
+  const json = await response.json();
+  // Backend already maps the data for GET /api/projects
+  return json as AirtableProject[];
 }
 
 export interface SaveProjectPayload {
@@ -173,13 +138,13 @@ function toFields(payload: SaveProjectPayload): ProjectFields {
   }
   fields[FIELD_NAME] = payload.projectName;
 
-  fields[FIELD_START] = payload.startDate ?? "";
-  fields[FIELD_END] = payload.endDate ?? "";
+  fields[FIELD_START] = payload.startDate || null;
+  fields[FIELD_END] = payload.endDate || null;
   fields[FIELD_COORDINATES] = stringifyList(payload.coordinates);
   fields[FIELD_LIGHT_IDS] = stringifyList(payload.lightIds);
   fields[FIELD_SCENES] = stringifyList(payload.scenes);
   fields[FIELD_ACTIVE] = payload.isActive;
-  fields[FIELD_LAT_LON] = payload.latLon ?? "";
+  fields[FIELD_LAT_LON] = payload.latLon || null;
   fields[FIELD_OWNER_EMAIL] = stringifyList(payload.ownerEmails);
   return fields;
 }
@@ -187,11 +152,9 @@ function toFields(payload: SaveProjectPayload): ProjectFields {
 export async function createProject(
   payload: SaveProjectPayload
 ): Promise<AirtableProject> {
-  assertEnv();
-  const response = await fetch(buildUrl(), {
+  const response = await fetch("/api/projects", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${AIRTABLE_PAT}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ fields: toFields(payload) }),
@@ -210,11 +173,9 @@ export async function updateProject(
   id: string,
   payload: SaveProjectPayload
 ): Promise<AirtableProject> {
-  assertEnv();
-  const response = await fetch(buildUrl(id), {
+  const response = await fetch(`/api/projects/${id}`, {
     method: "PATCH",
     headers: {
-      Authorization: `Bearer ${AIRTABLE_PAT}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ fields: toFields(payload) }),
@@ -230,12 +191,8 @@ export async function updateProject(
 }
 
 export async function deleteProject(id: string): Promise<void> {
-  assertEnv();
-  const response = await fetch(buildUrl(id), {
+  const response = await fetch(`/api/projects/${id}`, {
     method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${AIRTABLE_PAT}`,
-    },
   });
 
   if (!response.ok) {
