@@ -6,6 +6,8 @@ import type {
   ClickRankingRow,
   DailyClickPoint,
   DailyScanPoint,
+  ClickSessionAnalytics,
+  SceneUserStatRow,
 } from "./stats";
 import type { UserAcquisitionPoint } from "./stats";
 
@@ -19,6 +21,8 @@ interface ProjectReportParams {
   dailyClickSeries: DailyClickPoint[];
   clickRanking: ClickRankingRow[];
   userAcquisitionSeries: UserAcquisitionPoint[];
+  sessionAnalytics: ClickSessionAnalytics | null;
+  sceneUserStats: SceneUserStatRow[];
   reportedBy?: string;
 }
 
@@ -38,6 +42,8 @@ export async function generateProjectReportPdf({
   dailyClickSeries,
   clickRanking,
   userAcquisitionSeries,
+  sessionAnalytics,
+  sceneUserStats,
   reportedBy = "Light Generation Co. Ltd.",
 }: ProjectReportParams): Promise<void> {
   const doc = new jsPDF({
@@ -96,6 +102,8 @@ export async function generateProjectReportPdf({
     height: 140,
     stroke: { r: 31, g: 119, b: 180 },
     summaryLabel: buildSummaryText(dailyScanSeries),
+    chartType: "bar",
+    showCumulative: true,
   }) + 24;
 
   cursorY = drawSectionHeading(doc, "Interactions", margin, contentWidth, cursorY);
@@ -112,6 +120,8 @@ export async function generateProjectReportPdf({
     height: 140,
     stroke: { r: 44, g: 160, b: 44 },
     summaryLabel: buildSummaryText(dailyClickSeries),
+    chartType: "bar",
+    showCumulative: true,
   }) + 24;
 
   if (cursorY + 220 > pageHeight - margin) {
@@ -135,26 +145,34 @@ export async function generateProjectReportPdf({
     summaryLabel: buildSummaryText(
       userAcquisitionSeries.map((point) => ({ total: point.newUsers }))
     ),
+    chartType: "bar",
+    showCumulative: true,
   }) + 24;
 
-  if (cursorY + 160 > pageHeight - margin) {
+  // New Page: Session Intelligence
+  if (sessionAnalytics) {
     doc.addPage();
     cursorY = margin;
+    cursorY = drawSessionIntelligencePage(
+      doc,
+      sessionAnalytics,
+      margin,
+      contentWidth,
+      cursorY
+    );
   }
-  cursorY = drawSectionHeading(
+
+  // New Page: Interactions & Scenes
+  doc.addPage();
+  cursorY = margin;
+  cursorY = drawInteractionsAndScenesPage(
     doc,
-    "Interactions — Top AR Objects",
+    clickRanking,
+    sceneUserStats,
     margin,
     contentWidth,
     cursorY
   );
-  cursorY = drawInteractionTable(
-    doc,
-    clickRanking,
-    margin,
-    contentWidth,
-    cursorY
-  ) + 20;
 
   const pageCount = doc.getNumberOfPages();
   for (let page = 1; page <= pageCount; page += 1) {
@@ -294,10 +312,23 @@ interface TrendCardOptions {
   height: number;
   stroke: { r: number; g: number; b: number };
   summaryLabel: string;
+  chartType?: "line" | "bar";
+  showCumulative?: boolean;
 }
 
 function drawTrendCard(doc: jsPDF, options: TrendCardOptions): number {
-  const { title, series, x, y, width, height, stroke, summaryLabel } = options;
+  const {
+    title,
+    series,
+    x,
+    y,
+    width,
+    height,
+    stroke,
+    summaryLabel,
+    chartType = "line",
+    showCumulative = false,
+  } = options;
   doc.setFont(REPORT_FONT_NAME, "bold");
   doc.setFontSize(11);
   doc.text(title, x, y);
@@ -313,10 +344,16 @@ function drawTrendCard(doc: jsPDF, options: TrendCardOptions): number {
     });
   } else {
     const values = series.map((item) => item.value);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const safeRange = max - min || 1;
+    const max = Math.max(...values, 1);
     const cumulativeTotal = values.reduce((acc, value) => acc + value, 0);
+
+    // Calculate cumulative series
+    let runningTotal = 0;
+    const cumulativeValues = values.map((v) => {
+      runningTotal += v;
+      return runningTotal;
+    });
+    const maxCumulative = Math.max(...cumulativeValues, 1);
 
     doc.setFont(REPORT_FONT_NAME, "normal");
     doc.setFontSize(10);
@@ -332,55 +369,72 @@ function drawTrendCard(doc: jsPDF, options: TrendCardOptions): number {
       doc.line(x + 8, lineY, x + width - 8, lineY);
     }
 
-    doc.setDrawColor(stroke.r, stroke.g, stroke.b);
-    doc.setLineWidth(1.4);
-    const points = series.map((item, idx) => {
-      const ratio =
-        series.length === 1 ? 0 : idx / Math.max(1, series.length - 1);
-      const px = x + 12 + ratio * (width - 24);
-      const py =
-        cardY +
-        height -
-        12 -
-        ((item.value - min) / safeRange) * (height - 24);
-      return { px, py, value: item.value, label: item.label };
-    });
+    // Draw Chart
+    const chartHeight = height - 36; // Reserve space for header and axis
+    const chartBottomY = cardY + height - 12;
 
-    if (points.length >= 2) {
-      for (let i = 0; i < points.length - 1; i += 1) {
-        const start = points[i];
-        const end = points[i + 1];
-        doc.line(start.px, start.py, end.px, end.py);
+    const pointWidth = (width - 24) / series.length;
+
+    // Draw Bars or Lines
+    if (chartType === "bar") {
+      doc.setFillColor(stroke.r, stroke.g, stroke.b);
+      series.forEach((item, idx) => {
+        const barHeight = (item.value / max) * chartHeight;
+        const px = x + 12 + idx * pointWidth + pointWidth * 0.1;
+        const py = chartBottomY - barHeight;
+        const barW = pointWidth * 0.8;
+        doc.rect(px, py, barW, barHeight, "F");
+      });
+    } else {
+      // Line Chart
+      doc.setDrawColor(stroke.r, stroke.g, stroke.b);
+      doc.setLineWidth(1.4);
+      const points = series.map((item, idx) => {
+        const px = x + 12 + idx * pointWidth + pointWidth * 0.5;
+        const py = chartBottomY - (item.value / max) * chartHeight;
+        return { px, py };
+      });
+
+      if (points.length >= 2) {
+        for (let i = 0; i < points.length - 1; i += 1) {
+          doc.line(points[i].px, points[i].py, points[i + 1].px, points[i + 1].py);
+        }
       }
+      doc.setFillColor(stroke.r, stroke.g, stroke.b);
+      points.forEach((p) => doc.circle(p.px, p.py, 2, "F"));
     }
 
-    doc.setFillColor(stroke.r, stroke.g, stroke.b);
-    points.forEach((point) => {
-      doc.circle(point.px, point.py, 2, "F");
-    });
-
-    doc.setFont(REPORT_FONT_NAME, "normal");
-    doc.setFontSize(8);
-    points.forEach((point) => {
-      const textY = Math.min(point.py - 4, cardY + height - 18);
-      doc.text(formatNumber(point.value), point.px, textY, {
-        align: "center",
+    // Draw Cumulative Line
+    if (showCumulative) {
+      doc.setDrawColor(255, 140, 0); // Orange for cumulative
+      doc.setLineWidth(1.5);
+      const cumPoints = cumulativeValues.map((val, idx) => {
+        const px = x + 12 + idx * pointWidth + pointWidth * 0.5;
+        const py = chartBottomY - (val / maxCumulative) * chartHeight;
+        return { px, py };
       });
-    });
 
-    const labelStep = Math.max(1, Math.ceil(series.length / 8));
-    const axisY = cardY + height - 6;
-    doc.setFontSize(7);
-    points.forEach((point, index) => {
-      if (
-        index !== 0 &&
-        index !== points.length - 1 &&
-        index % labelStep !== 0
-      ) {
-        return;
+      if (cumPoints.length >= 2) {
+        for (let i = 0; i < cumPoints.length - 1; i += 1) {
+          doc.line(cumPoints[i].px, cumPoints[i].py, cumPoints[i + 1].px, cumPoints[i + 1].py);
+        }
       }
-      doc.text(point.label, point.px, axisY, { align: "center" });
+      doc.setFillColor(255, 140, 0);
+      cumPoints.forEach((p) => doc.circle(p.px, p.py, 1.5, "F"));
+    }
+
+    // X-Axis Labels
+    const labelStep = Math.max(1, Math.ceil(series.length / 8));
+    const axisY = cardY + height - 4;
+    doc.setFontSize(7);
+    doc.setTextColor(100, 100, 100);
+    series.forEach((item, index) => {
+      if (index % labelStep === 0) {
+        const px = x + 12 + index * pointWidth + pointWidth * 0.5;
+        doc.text(item.label, px, axisY, { align: "center" });
+      }
     });
+    doc.setTextColor(11, 31, 51); // Reset color
   }
 
   return cardY + height + 10;
@@ -507,4 +561,134 @@ function buildSummaryText(series: Array<{ total: number }>): string {
   const sum = totals.reduce((acc, value) => acc + value, 0);
   const max = Math.max(...totals);
   return `Total ${formatNumber(sum)} • Peak ${formatNumber(max)}`;
+}
+
+function drawSessionIntelligencePage(
+  doc: jsPDF,
+  analytics: ClickSessionAnalytics,
+  margin: number,
+  width: number,
+  startY: number
+): number {
+  let cursorY = drawSectionHeading(
+    doc,
+    "Marketing Insights — Session Intelligence",
+    margin,
+    width,
+    startY
+  );
+
+  // Metrics Row
+  const metrics = [
+    { label: "Total Sessions", value: formatNumber(analytics.insights.totalSessions) },
+    { label: "Avg Duration", value: `${analytics.insights.avgDurationSeconds.toFixed(1)}s` },
+    { label: "Median Duration", value: `${analytics.insights.medianDurationSeconds.toFixed(1)}s` },
+  ];
+
+  const cardWidth = (width - 20) / 3;
+  metrics.forEach((m, i) => {
+    const x = margin + i * (cardWidth + 10);
+    doc.setDrawColor(200, 200, 200);
+    doc.roundedRect(x, cursorY, cardWidth, 50, 4, 4);
+    doc.setFont(REPORT_FONT_NAME, "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(100, 100, 100);
+    doc.text(m.label, x + 10, cursorY + 20);
+    doc.setFont(REPORT_FONT_NAME, "bold");
+    doc.setFontSize(14);
+    doc.setTextColor(11, 31, 51);
+    doc.text(m.value, x + 10, cursorY + 40);
+  });
+  cursorY += 70;
+
+  // Tables
+  const halfWidth = (width - 20) / 2;
+
+  // Top Entry Objects
+  doc.setFontSize(11);
+  doc.text("Top Entry Objects", margin, cursorY);
+  autoTable(doc, {
+    startY: cursorY + 10,
+    margin: { left: margin },
+    tableWidth: halfWidth,
+    head: [["Object", "Sessions"]],
+    body: analytics.insights.topEntryObjects
+      .slice(0, 5)
+      .map((o) => [o.name, o.count.toString()]),
+    theme: "grid",
+    styles: { font: REPORT_FONT_NAME, fontSize: 9 },
+    headStyles: { fillColor: [79, 154, 195] },
+  });
+
+  // Top Exit Objects
+  doc.text("Top Exit Objects", margin + halfWidth + 20, cursorY);
+  autoTable(doc, {
+    startY: cursorY + 10,
+    margin: { left: margin + halfWidth + 20 },
+    tableWidth: halfWidth,
+    head: [["Object", "Sessions"]],
+    body: analytics.insights.topExitObjects
+      .slice(0, 5)
+      .map((o) => [o.name, o.count.toString()]),
+    theme: "grid",
+    styles: { font: REPORT_FONT_NAME, fontSize: 9 },
+    headStyles: { fillColor: [79, 154, 195] },
+  });
+
+  return getLastTableY(doc, cursorY + 10);
+}
+
+function drawInteractionsAndScenesPage(
+  doc: jsPDF,
+  ranking: ClickRankingRow[],
+  sceneStats: SceneUserStatRow[],
+  margin: number,
+  width: number,
+  startY: number
+): number {
+  let cursorY = drawSectionHeading(
+    doc,
+    "Interactions & Scenes",
+    margin,
+    width,
+    startY
+  );
+
+  // Top AR Objects
+  doc.setFont(REPORT_FONT_NAME, "bold");
+  doc.setFontSize(12);
+  doc.text("Top AR Objects", margin, cursorY + 10);
+  cursorY = drawInteractionTable(doc, ranking, margin, width, cursorY + 20);
+
+  // Scene Statistics
+  cursorY += 30;
+  doc.setFont(REPORT_FONT_NAME, "bold");
+  doc.setFontSize(12);
+  doc.text("Scene Statistics", margin, cursorY);
+
+  const sceneRows = sceneStats.slice(0, 10).map((row) => [
+    row.sceneName,
+    formatNumber(row.newUsers),
+    formatNumber(row.activeUsers),
+  ]);
+
+  if (sceneRows.length === 0) {
+    doc.setFont(REPORT_FONT_NAME, "normal");
+    doc.setFontSize(10);
+    doc.text("No scene data available.", margin, cursorY + 20);
+    return cursorY + 40;
+  }
+
+  autoTable(doc, {
+    startY: cursorY + 10,
+    margin: { left: margin, right: margin },
+    tableWidth: width,
+    head: [["Scene", "New Users", "Active Users"]],
+    body: sceneRows,
+    theme: "grid",
+    styles: { font: REPORT_FONT_NAME, fontSize: 9, cellPadding: 4 },
+    headStyles: { fillColor: [15, 46, 91], font: REPORT_FONT_NAME },
+  });
+
+  return getLastTableY(doc, cursorY + 10);
 }

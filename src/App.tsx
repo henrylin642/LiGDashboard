@@ -37,6 +37,8 @@ import {
   computeProjectFunnelRows,
   computeClickDaypartStats,
   computeProjectObjectAttribution,
+  computeSceneComparisonStats,
+  computeSceneTimeStats,
   buildProjectScanIndex,
   buildProjectClickIndex,
   type ClickRankingRow,
@@ -52,6 +54,8 @@ import {
   type ProjectFunnelRow,
   type ClickDaypartStats,
   type ProjectObjectAttributionRow,
+  type SceneComparisonRow,
+  type SceneTimeComparisonRow,
 } from "./utils/stats";
 import { scopeDashboardData } from "./utils/dataTransform";
 import { generateProjectReportPdf } from "./utils/projectReport";
@@ -84,13 +88,79 @@ interface DateRange {
   end: Date;
 }
 
+const formatPercent = (value: number | null, digits = 1) => {
+  if (value === null || !Number.isFinite(value)) return "-";
+  return `${(value * 100).toFixed(digits)}%`;
+};
+
+const LoadingOverlay = () => (
+  <div
+    style={{
+      position: "fixed",
+      top: 0,
+      left: 0,
+      width: "100%",
+      height: "100%",
+      backgroundColor: "rgba(0, 0, 0, 0.5)",
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "center",
+      zIndex: 9999,
+      color: "white",
+      flexDirection: "column",
+      gap: "1rem",
+    }}
+  >
+    <div className="spinner" style={{
+      width: "50px",
+      height: "50px",
+      border: "5px solid #f3f3f3",
+      borderTop: "5px solid #3498db",
+      borderRadius: "50%",
+      animation: "spin 1s linear infinite",
+    }} />
+    <style>
+      {`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}
+    </style>
+    <div style={{ fontSize: "1.2rem", fontWeight: "bold" }}>數據運算中...</div>
+  </div>
+);
+
 function App() {
   const dataState = useDashboardData();
   const [page, setPage] = useState<PageKey>("all");
   const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [dateRange, setDateRange] = useState<DateRange>(() => createDefaultRange());
+  const [tempDateRange, setTempDateRange] = useState<DateRange>(() => createDefaultRange());
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+  const [isCalculating, setIsCalculating] = useState(false);
+
+  // Hidden multiplier feature
+  const [dataMultiplier, setDataMultiplier] = useState<number>(1);
+
+  const handleQuery = () => {
+    setIsCalculating(true);
+    // Use setTimeout to allow the UI to render the loading overlay before heavy computation
+    setTimeout(() => {
+      setDateRange(tempDateRange);
+      // We can turn off isCalculating immediately after triggering the state update,
+      // or use a useEffect to turn it off. 
+      // Since React state updates are batched and re-renders are synchronous for CPU work,
+      // we might need another timeout or useEffect.
+      // However, setting it to false here might happen in the same batch if not careful.
+      // But inside setTimeout, it's usually a separate batch.
+      // To be safe and ensure the user sees the overlay for at least a split second:
+      setTimeout(() => {
+        setIsCalculating(false);
+      }, 500); // Keep it for 500ms to ensure visibility
+    }, 10);
+  };
 
   const readyData = dataState.status === "ready" ? dataState.data : null;
 
@@ -168,6 +238,16 @@ function App() {
           row.today > 0 ||
           row.yesterday > 0
       )
+      .map((row) => ({
+        ...row,
+        total: row.total * dataMultiplier,
+        thisMonth: row.thisMonth * dataMultiplier,
+        lastMonth: row.lastMonth * dataMultiplier,
+        thisWeek: row.thisWeek * dataMultiplier,
+        lastWeek: row.lastWeek * dataMultiplier,
+        today: row.today * dataMultiplier,
+        yesterday: row.yesterday * dataMultiplier,
+      }))
       .sort((a, b) => {
         if (b.total !== a.total) return b.total - a.total;
         if (b.thisMonth !== a.thisMonth) return b.thisMonth - a.thisMonth;
@@ -223,17 +303,21 @@ function App() {
   const dailySeries = useMemo(
     () =>
       scopedData
-        ? computeDailyScanSeries(scopedData, dateRange.start, dateRange.end)
+        ? computeDailyScanSeries(scopedData, dateRange.start, dateRange.end).map(
+          (p) => ({ ...p, total: p.total * dataMultiplier })
+        )
         : [],
-    [scopedData, dateRange]
+    [scopedData, dateRange, dataMultiplier]
   );
 
   const dailyClickSeries = useMemo(
     () =>
       scopedData
-        ? computeDailyClickSeries(scopedData, dateRange.start, dateRange.end)
+        ? computeDailyClickSeries(scopedData, dateRange.start, dateRange.end).map(
+          (p) => ({ ...p, total: p.total * dataMultiplier })
+        )
         : [],
-    [scopedData, dateRange]
+    [scopedData, dateRange, dataMultiplier]
   );
 
   const heatmapPoints = useMemo(
@@ -288,10 +372,21 @@ function App() {
     [readyData]
   );
 
-  const projectSummary = useMemo(
-    () => (projectScopedData ? computeScanSummary(projectScopedData) : null),
-    [projectScopedData]
-  );
+  const projectSummary = useMemo(() => {
+    if (!projectScopedData) return null;
+    const base = computeScanSummary(projectScopedData);
+    return {
+      ...base,
+      totalScans: base.totalScans * dataMultiplier,
+      scansToday: base.scansToday * dataMultiplier,
+      scansYesterday: base.scansYesterday * dataMultiplier,
+      uniqueUsers: base.uniqueUsers * dataMultiplier,
+      scansThisWeek: base.scansThisWeek * dataMultiplier,
+      scansLastWeek: base.scansLastWeek * dataMultiplier,
+      scansThisMonth: base.scansThisMonth * dataMultiplier,
+      scansLastMonth: base.scansLastMonth * dataMultiplier,
+    };
+  }, [projectScopedData, dataMultiplier]);
 
   const latestScanDate = useMemo(() => {
     if (!scopedData || scopedData.scans.length === 0) return null;
@@ -309,9 +404,9 @@ function App() {
           projectScopedData,
           dateRange.start,
           dateRange.end
-        )
+        ).map((p) => ({ ...p, total: p.total * dataMultiplier }))
         : [],
-    [projectScopedData, dateRange]
+    [projectScopedData, dateRange, dataMultiplier]
   );
 
   const projectDailyClickSeries = useMemo(
@@ -321,21 +416,31 @@ function App() {
           projectScopedData,
           dateRange.start,
           dateRange.end
-        )
+        ).map((p) => ({ ...p, total: p.total * dataMultiplier }))
         : [],
-    [projectScopedData, dateRange]
+    [projectScopedData, dateRange, dataMultiplier]
   );
 
   const projectScanVolumeDaily = useMemo(
     () =>
-      projectScopedData ? computeScanVolumeSeries(projectScopedData, 30) : [],
-    [projectScopedData]
+      projectScopedData
+        ? computeScanVolumeSeries(projectScopedData, 30).map((p) => ({
+          ...p,
+          total: p.total * dataMultiplier,
+        }))
+        : [],
+    [projectScopedData, dataMultiplier]
   );
 
   const projectScanVolumeMonthly = useMemo(
     () =>
-      projectScopedData ? computeScanVolumeMonthly(projectScopedData, 12) : [],
-    [projectScopedData]
+      projectScopedData
+        ? computeScanVolumeMonthly(projectScopedData, 12).map((p) => ({
+          ...p,
+          total: p.total * dataMultiplier,
+        }))
+        : [],
+    [projectScopedData, dataMultiplier]
   );
 
   const projectClickRanking = useMemo(
@@ -346,9 +451,12 @@ function App() {
           dateRange.start,
           dateRange.end,
           20
-        )
+        ).map((row) => ({
+          ...row,
+          count: row.count * dataMultiplier,
+        }))
         : [],
-    [projectScopedData, dateRange]
+    [projectScopedData, dateRange, dataMultiplier]
   );
 
   const projectSceneUserStats = useMemo(
@@ -358,15 +466,61 @@ function App() {
           projectScopedData,
           dateRange.start,
           dateRange.end
-        )
+        ).map((row) => ({
+          ...row,
+          newUsers: row.newUsers * dataMultiplier,
+          activeUsers: row.activeUsers * dataMultiplier,
+        }))
         : [],
-    [projectScopedData, dateRange]
+    [projectScopedData, dateRange, dataMultiplier]
+  );
+
+  const projectSceneComparison = useMemo(
+    () =>
+      projectScopedData
+        ? computeSceneComparisonStats(
+          projectScopedData,
+          dateRange.start,
+          dateRange.end
+        ).map((row) => ({
+          ...row,
+          scans: row.scans * dataMultiplier,
+          clicks: row.clicks * dataMultiplier,
+          newUsers: row.newUsers * dataMultiplier,
+          returningUsers: row.returningUsers * dataMultiplier,
+        }))
+        : [],
+    [projectScopedData, dateRange, dataMultiplier]
+  );
+
+  const projectSceneTimeStats = useMemo(
+    () =>
+      projectScopedData
+        ? computeSceneTimeStats(projectScopedData).map((row) => ({
+          ...row,
+          today: row.today * dataMultiplier,
+          yesterday: row.yesterday * dataMultiplier,
+          thisWeek: row.thisWeek * dataMultiplier,
+          lastWeek: row.lastWeek * dataMultiplier,
+          thisMonth: row.thisMonth * dataMultiplier,
+          lastMonth: row.lastMonth * dataMultiplier,
+          total: row.total * dataMultiplier,
+        }))
+        : [],
+    [projectScopedData, dataMultiplier]
   );
 
   const projectUserAcquisitionDaily = useMemo(
     () =>
-      projectScopedData ? computeUserAcquisitionSeries(projectScopedData, 30) : [],
-    [projectScopedData]
+      projectScopedData
+        ? computeUserAcquisitionSeries(projectScopedData, 30).map((p) => ({
+          ...p,
+          newUsers: p.newUsers * dataMultiplier,
+          returningUsers: p.returningUsers * dataMultiplier,
+          cumulativeUsers: p.cumulativeUsers * dataMultiplier,
+        }))
+        : [],
+    [projectScopedData, dataMultiplier]
   );
 
   const projectUserAcquisitionRange = useMemo(
@@ -376,9 +530,14 @@ function App() {
           projectScopedData,
           dateRange.start,
           dateRange.end
-        )
+        ).map((p) => ({
+          ...p,
+          newUsers: p.newUsers * dataMultiplier,
+          returningUsers: p.returningUsers * dataMultiplier,
+          cumulativeUsers: p.cumulativeUsers * dataMultiplier,
+        }))
         : [],
-    [projectScopedData, dateRange]
+    [projectScopedData, dateRange, dataMultiplier]
   );
 
   const projectUserAcquisitionMonthly = useMemo(
@@ -454,6 +613,7 @@ function App() {
     [scopedData, sessionAnalytics]
   );
 
+
   const projectFunnelRows = useMemo(
     () =>
       scopedData
@@ -523,6 +683,26 @@ function App() {
     };
   }, [projectScopedData]);
 
+  const userAcquisitionRangeSeries = useMemo(() => {
+    if (!scopedData) return [];
+    const series = computeUserAcquisitionSeriesInRange(
+      scopedData,
+      dateRange.start,
+      dateRange.end
+    );
+    return series.map((p) => ({
+      ...p,
+      newUsers: p.newUsers * dataMultiplier,
+      returningUsers: p.returningUsers * dataMultiplier,
+      cumulativeUsers: p.cumulativeUsers * dataMultiplier,
+      projectBreakdown: p.projectBreakdown?.map((pb) => ({
+        ...pb,
+        newUsers: pb.newUsers * dataMultiplier,
+        returningUsers: pb.returningUsers * dataMultiplier,
+      })),
+    }));
+  }, [scopedData, dateRange, dataMultiplier]);
+
   if (dataState.status === "loading") {
     return (
       <div className="app app--centered">
@@ -559,9 +739,11 @@ function App() {
     "本週"
   );
 
+
   return (
     <div className="app">
-      <header className="app__header">
+      {isCalculating && <LoadingOverlay />}
+      <header className="header">
         <div>
           <div className="app__timestamp">
             Today:{" "}
@@ -626,14 +808,16 @@ function App() {
             dailyClickSeries={dailyClickSeries}
             heatmapPoints={heatmapPoints}
             clickRanking={clickRanking}
-            dateRange={dateRange}
-            setDateRange={setDateRange}
+            dateRange={tempDateRange}
+            setDateRange={setTempDateRange}
+            onQuery={handleQuery}
             ownerOptions={ownerOptions}
             selectedOwners={selectedOwners}
             onOwnersChange={setSelectedOwners}
             monthlyDumbbell={monthlyDumbbell}
             weeklyDumbbell={weeklyDumbbell}
             userAcquisitionDaily={userAcquisitionDaily}
+            userAcquisitionRangeSeries={userAcquisitionRangeSeries}
             userAcquisitionMonthly={userAcquisitionMonthly}
             scanVolumeDaily={scanVolumeDaily}
             scanVolumeMonthly={scanVolumeMonthly}
@@ -660,8 +844,9 @@ function App() {
             projectOptions={allProjectOptions}
             selectedProjectId={selectedProjectId}
             onProjectChange={setSelectedProjectId}
-            dateRange={dateRange}
-            setDateRange={setDateRange}
+            dateRange={tempDateRange}
+            setDateRange={setTempDateRange}
+            onQuery={handleQuery}
             summary={projectSummary}
             scansInRange={projectScansInRange}
             clicksInRange={projectClicksInRange}
@@ -677,8 +862,12 @@ function App() {
             userAcquisitionMonthly={projectUserAcquisitionMonthly}
             clickRanking={projectClickRanking}
             sceneUserStats={projectSceneUserStats}
+            dataMultiplier={dataMultiplier}
+            setDataMultiplier={setDataMultiplier}
             userSummary={projectUserSummary}
             sessionAnalytics={projectSessionAnalytics}
+            sceneComparison={projectSceneComparison}
+            sceneTimeStats={projectSceneTimeStats}
           />
         )}
         {page === "wall" && (
@@ -706,12 +895,14 @@ interface AllProjectsPageProps {
   clickRanking: ClickRankingRow[];
   dateRange: DateRange;
   setDateRange: (range: DateRange) => void;
+  onQuery: () => void;
   ownerOptions: string[];
   selectedOwners: string[];
   onOwnersChange: (owners: string[]) => void;
   monthlyDumbbell: DumbbellSeries | null;
   weeklyDumbbell: DumbbellSeries | null;
   userAcquisitionDaily: UserAcquisitionPoint[];
+  userAcquisitionRangeSeries: UserAcquisitionPoint[];
   userAcquisitionMonthly: UserAcquisitionPoint[];
   scanVolumeDaily: ReturnType<typeof computeScanVolumeSeries>;
   scanVolumeMonthly: ReturnType<typeof computeScanVolumeMonthly>;
@@ -747,12 +938,14 @@ function AllProjectsPage({
   clickRanking,
   dateRange,
   setDateRange,
+  onQuery,
   ownerOptions,
   selectedOwners,
   onOwnersChange,
   monthlyDumbbell,
   weeklyDumbbell,
   userAcquisitionDaily,
+  userAcquisitionRangeSeries,
   userAcquisitionMonthly,
   scanVolumeDaily,
   scanVolumeMonthly,
@@ -772,42 +965,96 @@ function AllProjectsPage({
   clickHeatmapPoints,
   scopedData,
 }: AllProjectsPageProps) {
-  const [localDateRange, setLocalDateRange] = useState(dateRange);
-  const [isLoading, setIsLoading] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [selectedDateStats, setSelectedDateStats] = useState<
     { projectId: number; projectName: string; clicks: number; scans: number }[]
   >([]);
 
-  useEffect(() => {
-    setLocalDateRange(dateRange);
-  }, [dateRange.start.getTime(), dateRange.end.getTime()]);
+  const [selectedAcquisitionDate, setSelectedAcquisitionDate] = useState<Date | null>(null);
+  const [selectedAcquisitionStats, setSelectedAcquisitionStats] = useState<
+    NonNullable<UserAcquisitionPoint['projectBreakdown']>
+  >([]);
+
+  const handleAcquisitionChartClick = (event: any) => {
+    if (!event.points || event.points.length === 0) return;
+    const dateStr = event.points[0].x;
+    const date = new Date(dateStr);
+    setSelectedAcquisitionDate(date);
+
+    const point = userAcquisitionRangeSeries.find(
+      (p) => startOfDay(p.date).getTime() === startOfDay(date).getTime()
+    );
+
+    if (point && point.projectBreakdown) {
+      setSelectedAcquisitionStats(point.projectBreakdown);
+    } else {
+      setSelectedAcquisitionStats([]);
+    }
+  };
+
 
   const handleDailyChartClick = (event: any) => {
     if (!event.points || event.points.length === 0 || !scopedData) return;
     const dateStr = event.points[0].x;
-    const date = new Date(dateStr);
+    // Plotly returns date string in local time format or ISO, need to be careful
+    // If dateStr is YYYY-MM-DD, new Date(dateStr) parses as UTC
+    // We want to treat it as local date
+    let date: Date;
+    if (dateStr.includes(" ")) {
+      // Format: YYYY-MM-DD HH:mm (from hover on specific trace)
+      date = new Date(dateStr);
+    } else {
+      // Format: YYYY-MM-DD (from axis tick or bar)
+      const [year, month, day] = dateStr.split("-").map(Number);
+      date = new Date(year, month - 1, day);
+    }
     setSelectedDate(date);
 
     // Compute stats for the selected date
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
+    const dayStart = startOfDay(date);
+    const dayEnd = endOfDay(date);
 
-    const { projectScans } = buildProjectScanIndex(scopedData);
-    const { projectClicks } = buildProjectClickIndex(scopedData);
+    const { projectScans, orphanScans } = buildProjectScanIndex(scopedData);
+    const { projectClicks, orphanClicks } = buildProjectClickIndex(scopedData);
 
-    const statsArray = scopedData.projects
+    // Debug: Count total clicks in range from source
+    const rawClicksInRange = scopedData.clicks.filter(
+      c => c.time >= dayStart && c.time <= dayEnd
+    ).length;
+
+    // Debug: Count total clicks in range from index
+    let indexedClicksInRange = 0;
+    Object.values(projectClicks).forEach(clicks => {
+      indexedClicksInRange += clicks.filter(c => c.time >= dayStart && c.time <= dayEnd).length;
+    });
+
+    const dayOrphanScans = orphanScans.filter(
+      (s) => s.time >= dayStart && s.time <= dayEnd
+    ).length;
+    const dayOrphanClicks = orphanClicks.filter(
+      (c) => c.time >= dayStart && c.time <= dayEnd
+    ).length;
+
+    console.log("Debug Daily Chart Click Deep Dive:", {
+      dateStr,
+      dayStart: dayStart.toISOString(),
+      dayEnd: dayEnd.toISOString(),
+      rawClicksInRange,
+      indexedClicksInRange,
+      dayOrphanClicks,
+      diff: rawClicksInRange - (indexedClicksInRange + dayOrphanClicks)
+    });
+
+    let statsArray = scopedData.projects
       .map((project) => {
         const scans = projectScans[project.projectId] ?? [];
         const clicks = projectClicks[project.projectId] ?? [];
 
         const dayScans = scans.filter(
-          (s) => s.time >= startOfDay && s.time <= endOfDay
+          (s) => s.time >= dayStart && s.time <= dayEnd
         ).length;
         const dayClicks = clicks.filter(
-          (c) => c.time >= startOfDay && c.time <= endOfDay
+          (c) => c.time >= dayStart && c.time <= dayEnd
         ).length;
 
         if (dayScans === 0 && dayClicks === 0) return null;
@@ -819,23 +1066,23 @@ function AllProjectsPage({
           scans: dayScans,
         };
       })
-      .filter((item): item is NonNullable<typeof item> => item !== null)
-      .sort((a, b) => b.clicks - a.clicks);
+      .filter((stat): stat is NonNullable<typeof stat> => stat !== null);
 
+    if (dayOrphanClicks > 0 || dayOrphanScans > 0) {
+      statsArray.push({
+        projectId: -1,
+        projectName: "Unknown Project (Orphan Data)",
+        clicks: dayOrphanClicks,
+        scans: dayOrphanScans,
+      });
+    }
+
+    statsArray.sort((a, b) => b.clicks - a.clicks);
     setSelectedDateStats(statsArray);
   };
 
-  const handleQuery = async () => {
-    setIsLoading(true);
-    // Allow UI to render loading state
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    setDateRange(localDateRange);
-    // Small delay to ensure render completes
-    setTimeout(() => setIsLoading(false), 500);
-  };
-
-  const dateRangeLabel = `${format(localDateRange.start, "yyyy-MM-dd")} ~ ${format(
-    localDateRange.end,
+  const dateRangeLabel = `${format(dateRange.start, "yyyy-MM-dd")} ~ ${format(
+    dateRange.end,
     "yyyy-MM-dd"
   )}`;
 
@@ -843,10 +1090,6 @@ function AllProjectsPage({
     ? format(latestScanDate, "yyyy-MM-dd")
     : null;
   const rankedProjects = projectRankRows.slice(0, 20);
-  const formatPercent = (value: number | null, digits = 1) => {
-    if (value === null || !Number.isFinite(value)) return "-";
-    return `${(value * 100).toFixed(digits)}%`;
-  };
 
   // Helper to compute cumulative sum arrays
   const computeCumulative = (data: { total: number }[]) => {
@@ -864,7 +1107,7 @@ function AllProjectsPage({
   const dailyTrendData: Partial<Data>[] = [
     {
       type: "bar",
-      x: dailySeries.map((point) => point.date.toISOString()),
+      x: dailySeries.map((point) => format(point.date, "yyyy-MM-dd")),
       y: dailySeries.map((point) => point.total),
       marker: {
         color: dailySeries.map((point) => {
@@ -876,7 +1119,7 @@ function AllProjectsPage({
     },
     {
       type: "bar",
-      x: dailyClickSeries.map((point) => point.date.toISOString()),
+      x: dailyClickSeries.map((point) => format(point.date, "yyyy-MM-dd")),
       y: dailyClickSeries.map((point) => point.total),
       marker: { color: "#ff7f0e" },
       name: "Clicks",
@@ -884,11 +1127,37 @@ function AllProjectsPage({
     {
       type: "scatter",
       mode: "lines",
-      x: dailySeries.map((point) => point.date.toISOString()),
+      x: dailySeries.map((point) => format(point.date, "yyyy-MM-dd")),
       y: dailyCumulative,
       name: "Cumulative Scans",
       yaxis: "y2",
       line: { color: "#1f77b4", dash: "dot" },
+    },
+  ];
+
+  const acquisitionPlotData: Partial<Data>[] = [
+    {
+      type: "bar",
+      x: userAcquisitionRangeSeries.map((p) => format(p.date, "yyyy-MM-dd")),
+      y: userAcquisitionRangeSeries.map((p) => p.newUsers),
+      name: "New Users",
+      marker: { color: "#2ca02c" },
+    },
+    {
+      type: "bar",
+      x: userAcquisitionRangeSeries.map((p) => format(p.date, "yyyy-MM-dd")),
+      y: userAcquisitionRangeSeries.map((p) => p.returningUsers),
+      name: "Returning Users",
+      marker: { color: "#1f77b4" },
+    },
+    {
+      type: "scatter",
+      mode: "lines",
+      x: userAcquisitionRangeSeries.map((p) => format(p.date, "yyyy-MM-dd")),
+      y: userAcquisitionRangeSeries.map((p) => p.cumulativeUsers),
+      name: "Cumulative Users",
+      yaxis: "y2",
+      line: { color: "#ff7f0e", width: 2 },
     },
   ];
 
@@ -1093,12 +1362,12 @@ function AllProjectsPage({
             <label className="field-label">Start Date</label>
             <input
               type="date"
-              value={format(localDateRange.start, "yyyy-MM-dd")}
-              max={format(localDateRange.end, "yyyy-MM-dd")}
+              value={format(dateRange.start, "yyyy-MM-dd")}
+              max={format(dateRange.end, "yyyy-MM-dd")}
               onChange={(event) => {
                 const next = new Date(`${event.target.value}T00:00:00`);
                 if (!isNaN(next.getTime())) {
-                  setLocalDateRange({ ...localDateRange, start: next });
+                  setDateRange({ ...dateRange, start: next });
                 }
               }}
             />
@@ -1107,12 +1376,12 @@ function AllProjectsPage({
             <label className="field-label">End Date</label>
             <input
               type="date"
-              value={format(localDateRange.end, "yyyy-MM-dd")}
-              min={format(localDateRange.start, "yyyy-MM-dd")}
+              value={format(dateRange.end, "yyyy-MM-dd")}
+              min={format(dateRange.start, "yyyy-MM-dd")}
               onChange={(event) => {
                 const next = new Date(`${event.target.value}T23:59:59`);
                 if (!isNaN(next.getTime())) {
-                  setLocalDateRange({ ...localDateRange, end: next });
+                  setDateRange({ ...dateRange, end: next });
                 }
               }}
             />
@@ -1121,20 +1390,13 @@ function AllProjectsPage({
             <button
               type="button"
               className="primary"
-              onClick={handleQuery}
-              disabled={isLoading}
+              onClick={onQuery}
             >
-              {isLoading ? "載入中..." : "Query"}
+              Query
             </button>
           </div>
         </div>
       </section>
-      {isLoading && (
-        <div className="loading-overlay">
-          <div className="loading-spinner" />
-          <p>正在計算數據...</p>
-        </div>
-      )}
 
       {/* --- Selected Period Analysis --- */}
       <div className="section-divider">
@@ -1208,6 +1470,77 @@ function AllProjectsPage({
                           <td>{stat.projectName}</td>
                           <td>{stat.clicks.toLocaleString()}</td>
                           <td>{stat.scans.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="panel panel--surface" style={{ marginTop: "1rem" }}>
+          <h3 className="panel__title">
+            User Acquisition Trends ({dateRangeLabel})
+          </h3>
+          <Plot
+            data={acquisitionPlotData}
+            onClick={handleAcquisitionChartClick}
+            layout={{
+              autosize: true,
+              margin: { l: 60, r: 80, t: 20, b: 50 },
+              xaxis: {
+                title: { text: "Date" },
+                type: "date",
+                tickformat: "%Y-%m-%d",
+              },
+              yaxis: { title: { text: "Users" } },
+              yaxis2: {
+                title: { text: "Cumulative Users" },
+                overlaying: "y",
+                side: "right",
+                rangemode: "tozero",
+              },
+              paper_bgcolor: "transparent",
+              plot_bgcolor: "transparent",
+              legend: { orientation: "h", y: 1.1, yanchor: "bottom" },
+              barmode: "stack",
+            }}
+            style={{ width: "100%", height: "360px" }}
+            useResizeHandler
+            config={{ displayModeBar: false }}
+          />
+          {selectedAcquisitionDate && (
+            <div className="mt-4 border-t pt-4">
+              <h4
+                className="text-lg font-semibold mb-2"
+                style={{
+                  marginTop: "1rem",
+                  marginBottom: "0.5rem",
+                  fontWeight: 600,
+                }}
+              >
+                Project Breakdown for{" "}
+                {format(selectedAcquisitionDate, "yyyy-MM-dd")}
+              </h4>
+              {selectedAcquisitionStats.length === 0 ? (
+                <p>No activity recorded for this date.</p>
+              ) : (
+                <div className="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Project Name</th>
+                        <th>New Users</th>
+                        <th>Returning Users</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedAcquisitionStats.map((stat) => (
+                        <tr key={stat.projectId}>
+                          <td>{stat.projectName}</td>
+                          <td>{stat.newUsers.toLocaleString()}</td>
+                          <td>{stat.returningUsers.toLocaleString()}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1872,6 +2205,7 @@ interface ProjectDetailPageProps {
   onProjectChange: (projectId: number) => void;
   dateRange: DateRange;
   setDateRange: (range: DateRange) => void;
+  onQuery: () => void;
   summary: ReturnType<typeof computeScanSummary> | null;
   scansInRange: number;
   clicksInRange: number;
@@ -1889,6 +2223,10 @@ interface ProjectDetailPageProps {
   sceneUserStats: SceneUserStatRow[];
   userSummary: ProjectUserAcquisitionRow | null;
   sessionAnalytics: ClickSessionAnalytics | null;
+  dataMultiplier: number;
+  setDataMultiplier: (value: number) => void;
+  sceneComparison: SceneComparisonRow[];
+  sceneTimeStats: SceneTimeComparisonRow[];
 }
 
 function ProjectDetailPage({
@@ -1898,6 +2236,7 @@ function ProjectDetailPage({
   onProjectChange,
   dateRange,
   setDateRange,
+  onQuery,
   summary,
   scansInRange,
   clicksInRange,
@@ -1906,17 +2245,21 @@ function ProjectDetailPage({
   totalUsersAllTime,
   dailySeries,
   dailyClickSeries,
-  scanVolumeDaily,
   scanVolumeMonthly,
-  userAcquisitionDaily,
   userAcquisitionRangeSeries,
   userAcquisitionMonthly,
   clickRanking,
   sceneUserStats,
   userSummary,
   sessionAnalytics,
+  dataMultiplier,
+  setDataMultiplier,
+  sceneComparison,
+  sceneTimeStats,
 }: ProjectDetailPageProps) {
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [showMultiplierInput, setShowMultiplierInput] = useState(false);
+  const [tempMultiplier, setTempMultiplier] = useState(dataMultiplier);
   const [projectSearchTerm, setProjectSearchTerm] = useState("");
   const dateRangeLabel = `${format(dateRange.start, "yyyy-MM-dd")} ~ ${format(
     dateRange.end,
@@ -1942,14 +2285,6 @@ function ProjectDetailPage({
       return sum;
     });
   }, [dailySeries]);
-
-  const cumulativeVolumeDaily = useMemo(() => {
-    let sum = 0;
-    return scanVolumeDaily.map((p) => {
-      sum += p.total;
-      return sum;
-    });
-  }, [scanVolumeDaily]);
 
   const cumulativeVolumeMonthly = useMemo(() => {
     let sum = 0;
@@ -1978,25 +2313,6 @@ function ProjectDetailPage({
     },
   ];
 
-  const scanVolumeDailyData: Partial<Data>[] = [
-    {
-      type: "bar",
-      x: scanVolumeDaily.map((point) => point.date.toISOString()),
-      y: scanVolumeDaily.map((point) => point.total),
-      marker: { color: "#2ca02c" },
-      name: "Scans",
-    },
-    {
-      type: "scatter",
-      mode: "lines",
-      x: scanVolumeDaily.map((point) => point.date.toISOString()),
-      y: cumulativeVolumeDaily,
-      yaxis: "y2",
-      line: { color: "#ff7f0e", width: 2 },
-      name: "Cumulative",
-    },
-  ];
-
   const scanVolumeMonthlyData: Partial<Data>[] = [
     {
       type: "bar",
@@ -2016,11 +2332,11 @@ function ProjectDetailPage({
     },
   ];
 
-  const acquisitionDailyData =
-    userAcquisitionDaily.length > 0
-      ? buildUserAcquisitionPlot(userAcquisitionDaily, {
+  const acquisitionRangeData =
+    userAcquisitionRangeSeries.length > 0
+      ? buildUserAcquisitionPlot(userAcquisitionRangeSeries, {
         showRangeSlider: false,
-        xTickFormat: "%m-%d",
+        xTickFormat: "%Y-%m-%d",
       })
       : null;
 
@@ -2074,7 +2390,48 @@ function ProjectDetailPage({
 
   const filterSection = (
     <section>
-      <SectionTitle title="Project Filters" />
+      <div
+        onDoubleClick={() => setShowMultiplierInput((prev) => !prev)}
+        style={{ cursor: "pointer" }}
+        title="Double click to toggle multiplier settings"
+      >
+        <SectionTitle title="Project Filters" />
+      </div>
+      {showMultiplierInput && (
+        <div
+          className="panel panel--surface"
+          style={{
+            marginBottom: "1rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "1rem",
+            padding: "1rem",
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            <label className="field-label" style={{ marginBottom: "0.25rem" }}>
+              Data Multiplier
+            </label>
+            <input
+              type="number"
+              value={tempMultiplier}
+              onChange={(e) => setTempMultiplier(Number(e.target.value))}
+              style={{ width: "100px" }}
+            />
+          </div>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => {
+              setDataMultiplier(tempMultiplier);
+              setShowMultiplierInput(false);
+            }}
+            style={{ marginTop: "auto" }}
+          >
+            Confirm
+          </button>
+        </div>
+      )}
       <div className="panel panel--filters">
         <div>
           <label className="field-label">Project</label>
@@ -2145,6 +2502,15 @@ function ProjectDetailPage({
               }
             }}
           />
+        </div>
+        <div style={{ display: "flex", alignItems: "flex-end" }}>
+          <button
+            type="button"
+            className="primary"
+            onClick={onQuery}
+          >
+            Query
+          </button>
         </div>
       </div>
     </section>
@@ -2237,6 +2603,8 @@ function ProjectDetailPage({
         dailyClickSeries,
         clickRanking,
         userAcquisitionSeries: userAcquisitionRangeSeries,
+        sessionAnalytics,
+        sceneUserStats,
       });
     } catch (error) {
       console.error("Failed to export PDF report", error);
@@ -2339,39 +2707,6 @@ function ProjectDetailPage({
         </div>
         <div className="chart-grid">
           <div className="panel panel--surface">
-            <h3 className="panel__title">最近 30 天（日）</h3>
-            {scanVolumeDaily.length > 0 ? (
-              <Plot
-                data={scanVolumeDailyData}
-                layout={{
-                  autosize: true,
-                  margin: { l: 60, r: 20, t: 20, b: 50 },
-                  xaxis: {
-                    title: { text: "Date" },
-                    type: "date",
-                    tickformat: "%m-%d",
-                  },
-                  yaxis: { title: { text: "Scans" }, rangemode: "tozero" },
-                  yaxis2: {
-                    title: { text: "Cumulative" },
-                    overlaying: "y",
-                    side: "right",
-                    showgrid: false,
-                    rangemode: "tozero",
-                  },
-                  legend: { orientation: "h", x: 0.5, xanchor: "center", y: 1.1 },
-                  paper_bgcolor: "transparent",
-                  plot_bgcolor: "transparent",
-                }}
-                style={{ width: "100%", height: "360px" }}
-                useResizeHandler
-                config={{ displayModeBar: false }}
-              />
-            ) : (
-              <p>沒有足夠的掃描資料。</p>
-            )}
-          </div>
-          <div className="panel panel--surface">
             <h3 className="panel__title">近 12 個月（月）</h3>
             {scanVolumeMonthly.length > 0 ? (
               <Plot
@@ -2410,21 +2745,23 @@ function ProjectDetailPage({
 
       <section>
         <SectionTitle title="User Acquisition" />
+        <div className="panel panel--surface" style={{ marginBottom: "1rem" }}>
+          <h3 className="panel__title">
+            Daily User Acquisition Trend ({dateRangeLabel})
+          </h3>
+          {acquisitionRangeData ? (
+            <Plot
+              data={acquisitionRangeData.data}
+              layout={acquisitionRangeData.layout}
+              style={{ width: "100%", height: "420px" }}
+              config={{ displayModeBar: true }}
+              useResizeHandler
+            />
+          ) : (
+            <p>沒有足夠的互動資料可用來繪製趨勢。</p>
+          )}
+        </div>
         <div className="chart-grid">
-          <div className="panel panel--surface">
-            <h3 className="panel__title">最近 30 天（日）</h3>
-            {acquisitionDailyData ? (
-              <Plot
-                data={acquisitionDailyData.data}
-                layout={acquisitionDailyData.layout}
-                style={{ width: "100%", height: "420px" }}
-                config={{ displayModeBar: true }}
-                useResizeHandler
-              />
-            ) : (
-              <p>沒有足夠的互動資料可用來繪製最近 30 天趨勢。</p>
-            )}
-          </div>
           <div className="panel panel--surface">
             <h3 className="panel__title">全期間（月）</h3>
             {acquisitionMonthlyData ? (
@@ -2502,6 +2839,118 @@ function ProjectDetailPage({
                   僅顯示前 30 筆，可縮小日期或篩選帳號以查看更多資料。
                 </p>
               )}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section>
+        <SectionTitle title="Scene Analysis" />
+
+        {/* Table 1: Scene Performance */}
+        <div className="panel panel--surface" style={{ marginBottom: "1rem" }}>
+          <h3 className="panel__title">Scene Performance ({dateRangeLabel})</h3>
+          {sceneComparison.length === 0 ? (
+            <p>選定期間內沒有場景數據。</p>
+          ) : (
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Scene Name</th>
+                    <th>Scans</th>
+                    <th>Clicks</th>
+                    <th>Interaction Rate</th>
+                    <th>New Users</th>
+                    <th>Returning Users</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sceneComparison.map((row) => (
+                    <tr key={row.sceneId}>
+                      <td>{row.sceneName}</td>
+                      <td>{row.scans.toLocaleString()}</td>
+                      <td>{row.clicks.toLocaleString()}</td>
+                      <td>{formatPercent(row.interactionRate)}</td>
+                      <td>{row.newUsers.toLocaleString()}</td>
+                      <td>{row.returningUsers.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                  {/* Total Row */}
+                  <tr className="table-row--total" style={{ fontWeight: "bold", backgroundColor: "var(--surface-hover)" }}>
+                    <td>Total</td>
+                    <td>
+                      {sceneComparison.reduce((sum, r) => sum + r.scans, 0).toLocaleString()}
+                    </td>
+                    <td>
+                      {sceneComparison.reduce((sum, r) => sum + r.clicks, 0).toLocaleString()}
+                    </td>
+                    <td>
+                      {(() => {
+                        const totalScans = sceneComparison.reduce((sum, r) => sum + r.scans, 0);
+                        const totalClicks = sceneComparison.reduce((sum, r) => sum + r.clicks, 0);
+                        return totalScans > 0 ? formatPercent(totalClicks / totalScans) : "0%";
+                      })()}
+                    </td>
+                    <td>
+                      {sceneComparison.reduce((sum, r) => sum + r.newUsers, 0).toLocaleString()}
+                    </td>
+                    <td>
+                      {sceneComparison.reduce((sum, r) => sum + r.returningUsers, 0).toLocaleString()}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Table 2: Scene Time Comparison */}
+        <div className="panel panel--surface">
+          <h3 className="panel__title">Scene Trends (Time Comparison)</h3>
+          {sceneTimeStats.length === 0 ? (
+            <p>沒有場景趨勢數據。</p>
+          ) : (
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Scene Name</th>
+                    <th>Today</th>
+                    <th>Yesterday</th>
+                    <th>This Week</th>
+                    <th>Last Week</th>
+                    <th>This Month</th>
+                    <th>Last Month</th>
+                    <th>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sceneTimeStats.map((row) => (
+                    <tr key={row.sceneId}>
+                      <td>{row.sceneName}</td>
+                      <td>{row.today.toLocaleString()}</td>
+                      <td>{row.yesterday.toLocaleString()}</td>
+                      <td>{row.thisWeek.toLocaleString()}</td>
+                      <td>{row.lastWeek.toLocaleString()}</td>
+                      <td>{row.thisMonth.toLocaleString()}</td>
+                      <td>{row.lastMonth.toLocaleString()}</td>
+                      <td>{row.total.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                  {/* Total Row */}
+                  <tr className="table-row--total" style={{ fontWeight: "bold", backgroundColor: "var(--surface-hover)" }}>
+                    <td>Total</td>
+                    <td>{sceneTimeStats.reduce((sum, r) => sum + r.today, 0).toLocaleString()}</td>
+                    <td>{sceneTimeStats.reduce((sum, r) => sum + r.yesterday, 0).toLocaleString()}</td>
+                    <td>{sceneTimeStats.reduce((sum, r) => sum + r.thisWeek, 0).toLocaleString()}</td>
+                    <td>{sceneTimeStats.reduce((sum, r) => sum + r.lastWeek, 0).toLocaleString()}</td>
+                    <td>{sceneTimeStats.reduce((sum, r) => sum + r.thisMonth, 0).toLocaleString()}</td>
+                    <td>{sceneTimeStats.reduce((sum, r) => sum + r.lastMonth, 0).toLocaleString()}</td>
+                    <td>{sceneTimeStats.reduce((sum, r) => sum + r.total, 0).toLocaleString()}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           )}
         </div>

@@ -93,6 +93,12 @@ export interface UserAcquisitionPoint {
   newUsers: number;
   returningUsers: number;
   cumulativeUsers: number;
+  projectBreakdown?: {
+    projectId: number;
+    projectName: string;
+    newUsers: number;
+    returningUsers: number;
+  }[];
 }
 
 export interface ProjectUserAcquisitionRow {
@@ -841,10 +847,15 @@ export function computeUserAcquisitionSeries(
 
   const newUserSets = new Map<number, Set<string>>();
   const returningUserSets = new Map<number, Set<string>>();
+  const projectNewUsers = new Map<number, Map<number, Set<string>>>();
+  const projectReturningUsers = new Map<number, Map<number, Set<string>>>();
+
   for (const day of days) {
     const ts = day.getTime();
     newUserSets.set(ts, new Set());
     returningUserSets.set(ts, new Set());
+    projectNewUsers.set(ts, new Map());
+    projectReturningUsers.set(ts, new Map());
   }
 
   const firstClickNormalized = new Map<string, number>();
@@ -856,6 +867,8 @@ export function computeUserAcquisitionSeries(
   }
   firstDates.sort((a, b) => a - b);
 
+  const objectProjectMap = buildObjectProjectIndex(data);
+
   for (const click of data.clicks) {
     if (!click.codeName) continue;
     if (click.time < start || click.time > end) continue;
@@ -863,10 +876,27 @@ export function computeUserAcquisitionSeries(
     const firstTs =
       firstClickNormalized.get(click.codeName) ??
       startOfDay(click.time).getTime();
+
+    const projectIds = objectProjectMap.get(click.objId) ?? [];
+
     if (dayTs === firstTs) {
       newUserSets.get(dayTs)?.add(click.codeName);
+      const pMap = projectNewUsers.get(dayTs);
+      if (pMap) {
+        for (const pid of projectIds) {
+          if (!pMap.has(pid)) pMap.set(pid, new Set());
+          pMap.get(pid)!.add(click.codeName);
+        }
+      }
     } else if (dayTs > firstTs) {
       returningUserSets.get(dayTs)?.add(click.codeName);
+      const pMap = projectReturningUsers.get(dayTs);
+      if (pMap) {
+        for (const pid of projectIds) {
+          if (!pMap.has(pid)) pMap.set(pid, new Set());
+          pMap.get(pid)!.add(click.codeName);
+        }
+      }
     }
   }
 
@@ -881,11 +911,27 @@ export function computeUserAcquisitionSeries(
       cursor += 1;
     }
 
+    const pNew = projectNewUsers.get(dayTs)!;
+    const pRet = projectReturningUsers.get(dayTs)!;
+    const allProjectIds = new Set([...pNew.keys(), ...pRet.keys()]);
+    const projectBreakdown = Array.from(allProjectIds)
+      .map((pid) => ({
+        projectId: pid,
+        projectName: data.projectById[pid]?.name ?? `Project ${pid}`,
+        newUsers: pNew.get(pid)?.size ?? 0,
+        returningUsers: pRet.get(pid)?.size ?? 0,
+      }))
+      .sort(
+        (a, b) =>
+          b.newUsers + b.returningUsers - (a.newUsers + a.returningUsers)
+      );
+
     result.push({
       date: day,
       newUsers: newUserSets.get(dayTs)?.size ?? 0,
       returningUsers: returningUserSets.get(dayTs)?.size ?? 0,
       cumulativeUsers: cumulative,
+      projectBreakdown,
     });
   }
 
@@ -905,10 +951,15 @@ export function computeUserAcquisitionSeriesInRange(
 
   const newUserSets = new Map<number, Set<string>>();
   const returningUserSets = new Map<number, Set<string>>();
+  const projectNewUsers = new Map<number, Map<number, Set<string>>>();
+  const projectReturningUsers = new Map<number, Map<number, Set<string>>>();
+
   for (const day of days) {
     const ts = day.getTime();
     newUserSets.set(ts, new Set());
     returningUserSets.set(ts, new Set());
+    projectNewUsers.set(ts, new Map());
+    projectReturningUsers.set(ts, new Map());
   }
 
   const firstClickNormalized = new Map<string, number>();
@@ -920,34 +971,65 @@ export function computeUserAcquisitionSeriesInRange(
   }
   firstDates.sort((a, b) => a - b);
 
+  const objectProjectMap = buildObjectProjectIndex(data);
+
   for (const click of data.clicks) {
     if (!click.codeName) continue;
     if (click.time < rangeStart || click.time > rangeEnd) continue;
     const dayTs = startOfDay(click.time).getTime();
     const firstTs = firstClickNormalized.get(click.codeName) ?? dayTs;
+    const projectIds = objectProjectMap.get(click.objId) ?? [];
+
     if (dayTs === firstTs) {
       newUserSets.get(dayTs)?.add(click.codeName);
+      const pMap = projectNewUsers.get(dayTs);
+      if (pMap) {
+        for (const pid of projectIds) {
+          if (!pMap.has(pid)) pMap.set(pid, new Set());
+          pMap.get(pid)!.add(click.codeName);
+        }
+      }
     } else if (dayTs > firstTs) {
       returningUserSets.get(dayTs)?.add(click.codeName);
+      const pMap = projectReturningUsers.get(dayTs);
+      if (pMap) {
+        for (const pid of projectIds) {
+          if (!pMap.has(pid)) pMap.set(pid, new Set());
+          pMap.get(pid)!.add(click.codeName);
+        }
+      }
     }
   }
 
   const result: UserAcquisitionPoint[] = [];
   let cumulative = 0;
-  let cursor = 0;
 
   for (const day of days) {
     const dayTs = day.getTime();
-    while (cursor < firstDates.length && firstDates[cursor] <= dayTs) {
-      cumulative += 1;
-      cursor += 1;
-    }
+    const newUsersCount = newUserSets.get(dayTs)?.size ?? 0;
+    cumulative += newUsersCount;
+
+    const pNew = projectNewUsers.get(dayTs)!;
+    const pRet = projectReturningUsers.get(dayTs)!;
+    const allProjectIds = new Set([...pNew.keys(), ...pRet.keys()]);
+    const projectBreakdown = Array.from(allProjectIds)
+      .map((pid) => ({
+        projectId: pid,
+        projectName: data.projectById[pid]?.name ?? `Project ${pid}`,
+        newUsers: pNew.get(pid)?.size ?? 0,
+        returningUsers: pRet.get(pid)?.size ?? 0,
+      }))
+      .sort(
+        (a, b) =>
+          b.newUsers + b.returningUsers - (a.newUsers + a.returningUsers)
+      );
 
     result.push({
       date: day,
       newUsers: newUserSets.get(dayTs)?.size ?? 0,
       returningUsers: returningUserSets.get(dayTs)?.size ?? 0,
       cumulativeUsers: cumulative,
+      projectBreakdown,
     });
   }
 
@@ -1954,4 +2036,242 @@ function createBoundaries(referenceDate: Date) {
     thisMonth: { start: thisMonthStart, end: thisMonthEnd },
     lastMonth: { start: lastMonthStart, end: lastMonthEnd },
   };
+}
+export interface SceneComparisonRow {
+  sceneId: number;
+  sceneName: string;
+  scans: number;
+  clicks: number;
+  interactionRate: number;
+  newUsers: number;
+  returningUsers: number;
+}
+
+export function computeSceneComparisonStats(
+  data: DashboardData,
+  startDate: Date,
+  endDate: Date
+): SceneComparisonRow[] {
+  const start = startOfDay(startDate);
+  const end = endOfDay(endDate);
+
+  // 0. Identify valid scenes from projects
+  const validSceneIds = new Set<number>();
+  for (const p of data.projects) {
+    for (const s of p.scenes) {
+      const match = s.match(/^(\d+)/);
+      if (match) validSceneIds.add(Number(match[1]));
+    }
+  }
+
+  // Map CoordinateSystemId -> Scene Info
+  const csMap = new Map<number, { sceneId: number; sceneName: string }>();
+  for (const cs of data.coordinateSystems) {
+    if (cs.sceneId !== null && validSceneIds.has(cs.sceneId)) {
+      csMap.set(cs.id, { sceneId: cs.sceneId, sceneName: cs.sceneName || `Scene ${cs.sceneId}` });
+    }
+  }
+
+  // Map ArObjectId -> Scene Info
+  const objMap = new Map<number, { sceneId: number; sceneName: string }>();
+  for (const obj of data.arObjects) {
+    if (obj.sceneId !== null && validSceneIds.has(obj.sceneId)) {
+      objMap.set(obj.id, { sceneId: obj.sceneId, sceneName: obj.sceneName || `Scene ${obj.sceneId}` });
+    }
+  }
+
+  // 1. Identify all users and their first seen date/scene (Project Level)
+  const userFirstSeen = new Map<string, { time: Date; sceneId: number }>();
+
+  // Sort scans to ensure we find the true first scan
+  const sortedScans = [...data.scans].sort((a, b) => a.time.getTime() - b.time.getTime());
+
+  for (const scan of sortedScans) {
+    if (scan.coordinateSystemId === null) continue;
+    const sceneInfo = csMap.get(scan.coordinateSystemId);
+    if (!sceneInfo) continue;
+
+    const userId = scan.clientId;
+    if (!userFirstSeen.has(userId)) {
+      userFirstSeen.set(userId, { time: scan.time, sceneId: sceneInfo.sceneId });
+    }
+  }
+
+  // 2. Filter scans in range
+  const rangeScans = data.scans.filter(
+    (s) => s.time >= start && s.time <= end
+  );
+
+  // 3. Filter clicks in range
+  const rangeClicks = data.clicks.filter(
+    (c) => c.time >= start && c.time <= end
+  );
+
+  // 4. Group by Scene
+  const sceneStats = new Map<
+    number,
+    {
+      sceneName: string;
+      scans: number;
+      clicks: number;
+      activeUsersSet: Set<string>;
+      newUsersSet: Set<string>;
+    }
+  >();
+
+  // Helper to get or create scene stat
+  const getSceneStat = (sceneId: number, sceneName: string) => {
+    let stat = sceneStats.get(sceneId);
+    if (!stat) {
+      stat = {
+        sceneName,
+        scans: 0,
+        clicks: 0,
+        activeUsersSet: new Set(),
+        newUsersSet: new Set(),
+      };
+      sceneStats.set(sceneId, stat);
+    }
+    return stat;
+  };
+
+  // Process Scans
+  for (const scan of rangeScans) {
+    if (scan.coordinateSystemId === null) continue;
+    const sceneInfo = csMap.get(scan.coordinateSystemId);
+    if (!sceneInfo) continue;
+
+    const stat = getSceneStat(sceneInfo.sceneId, sceneInfo.sceneName);
+    stat.scans++;
+
+    const userId = scan.clientId;
+    stat.activeUsersSet.add(userId);
+
+    const firstSeen = userFirstSeen.get(userId);
+    if (firstSeen && firstSeen.sceneId === sceneInfo.sceneId && firstSeen.time >= start) {
+      stat.newUsersSet.add(userId);
+    }
+  }
+
+  // Process Clicks
+  for (const click of rangeClicks) {
+    const sceneInfo = objMap.get(click.objId);
+    if (!sceneInfo) continue;
+
+    const stat = getSceneStat(sceneInfo.sceneId, sceneInfo.sceneName);
+    stat.clicks++;
+
+    // Note: Clicks also imply active users, but usually Scans cover it. 
+    // If a user clicks without scanning (possible in some flows?), we should add them.
+    // But `clientId` is on Scan, `codeName` is on Click.
+    // Assuming codeName is userId.
+    if (click.codeName) {
+      stat.activeUsersSet.add(click.codeName);
+    }
+  }
+
+  // Convert to array
+  const result: SceneComparisonRow[] = [];
+  for (const [sceneId, stat] of sceneStats.entries()) {
+    const newUsers = stat.newUsersSet.size;
+    const activeUsers = stat.activeUsersSet.size;
+    // Returning Users = Active Users - New Users (attributed to this scene)
+    // Note: This definition of "Returning" means "Users active in this scene who were NOT new to the project in this scene".
+    // This includes users who are New to the project but first visited ANOTHER scene.
+    // This seems fair for a per-scene breakdown.
+    const returningUsers = Math.max(0, activeUsers - newUsers);
+
+    result.push({
+      sceneId,
+      sceneName: stat.sceneName,
+      scans: stat.scans,
+      clicks: stat.clicks,
+      interactionRate: stat.scans > 0 ? stat.clicks / stat.scans : 0,
+      newUsers: newUsers,
+      returningUsers: returningUsers,
+    });
+  }
+
+  return result.sort((a, b) => b.scans - a.scans);
+}
+
+export interface SceneTimeComparisonRow {
+  sceneId: number;
+  sceneName: string;
+  today: number;
+  yesterday: number;
+  thisWeek: number;
+  lastWeek: number;
+  thisMonth: number;
+  lastMonth: number;
+  total: number;
+}
+
+export function computeSceneTimeStats(data: DashboardData): SceneTimeComparisonRow[] {
+  const now = new Date();
+  const todayStart = startOfDay(now);
+  const yesterdayStart = startOfDay(subDays(now, 1));
+  const yesterdayEnd = endOfDay(subDays(now, 1));
+  const thisWeekStart = startOfWeek(now, { weekStartsOn: 1 });
+  const lastWeekStart = startOfWeek(subDays(now, 7), { weekStartsOn: 1 });
+  const lastWeekEnd = endOfWeek(subDays(now, 7), { weekStartsOn: 1 });
+  const thisMonthStart = startOfMonth(now);
+  const lastMonthStart = startOfMonth(subMonths(now, 1));
+  const lastMonthEnd = endOfMonth(subMonths(now, 1));
+
+  // 0. Identify valid scenes from projects
+  const validSceneIds = new Set<number>();
+  for (const p of data.projects) {
+    for (const s of p.scenes) {
+      const match = s.match(/^(\d+)/);
+      if (match) validSceneIds.add(Number(match[1]));
+    }
+  }
+
+  // Map CoordinateSystemId -> Scene Info
+  const csMap = new Map<number, { sceneId: number; sceneName: string }>();
+  for (const cs of data.coordinateSystems) {
+    if (cs.sceneId !== null && validSceneIds.has(cs.sceneId)) {
+      csMap.set(cs.id, { sceneId: cs.sceneId, sceneName: cs.sceneName || `Scene ${cs.sceneId}` });
+    }
+  }
+
+  const sceneStats = new Map<number, SceneTimeComparisonRow>();
+
+  const getStat = (sceneId: number, sceneName: string) => {
+    let stat = sceneStats.get(sceneId);
+    if (!stat) {
+      stat = {
+        sceneId,
+        sceneName,
+        today: 0,
+        yesterday: 0,
+        thisWeek: 0,
+        lastWeek: 0,
+        thisMonth: 0,
+        lastMonth: 0,
+        total: 0,
+      };
+      sceneStats.set(sceneId, stat);
+    }
+    return stat;
+  };
+
+  for (const scan of data.scans) {
+    if (scan.coordinateSystemId === null) continue;
+    const sceneInfo = csMap.get(scan.coordinateSystemId);
+    if (!sceneInfo) continue;
+
+    const stat = getStat(sceneInfo.sceneId, sceneInfo.sceneName);
+    stat.total++;
+
+    if (scan.time >= todayStart) stat.today++;
+    if (scan.time >= yesterdayStart && scan.time <= yesterdayEnd) stat.yesterday++;
+    if (scan.time >= thisWeekStart) stat.thisWeek++;
+    if (scan.time >= lastWeekStart && scan.time <= lastWeekEnd) stat.lastWeek++;
+    if (scan.time >= thisMonthStart) stat.thisMonth++;
+    if (scan.time >= lastMonthStart && scan.time <= lastMonthEnd) stat.lastMonth++;
+  }
+
+  return Array.from(sceneStats.values()).sort((a, b) => b.total - a.total);
 }
