@@ -1107,6 +1107,7 @@ kbd {
   opacity: 0.6;
   cursor: not-allowed;
 }
+
 /* Loading Overlay */
 .loading-overlay {
   position: fixed;
@@ -1134,6 +1135,88 @@ kbd {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.scene-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0.5rem;
+  background: #f8fbff;
+  border: 1px solid #c8d7e4;
+  border-radius: 8px;
+}
+
+.scene-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: #eef3fb;
+  color: #0f2e5b;
+  padding: 0.2rem 0.6rem;
+  border-radius: 16px;
+  font-size: 0.9rem;
+  border: 1px solid #d7e4f2;
+}
+
+.scene-tag-remove {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+}
+
+.scene-tag-remove:hover {
+  background: #d7e4f2;
+  color: #d32f2f;
+}
+
+.scene-add-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.scene-add-row input {
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #c8d7e4;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.scene-add-row button {
+  padding: 0.4rem 0.8rem;
+  background: #eef3fb;
+  border: 1px solid #c8d7e4;
+  border-radius: 6px;
+  color: #0f2e5b;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.scene-add-row button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.scene-add-row button:not(:disabled):hover {
+  background: #d7e4f2;
 }

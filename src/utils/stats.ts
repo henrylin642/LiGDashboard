@@ -11,7 +11,10 @@ import {
   subDays,
   subMonths,
 } from "date-fns";
-import type { ClickRecord, DashboardData, Project, ScanRecord } from "../types";
+import type {
+  ClickRecord, DashboardData, Project, ScanRecord, UserBehaviorStats,
+  LightConfig,
+} from "../types";
 
 export interface ScanSummary {
   totalProjects: number;
@@ -2045,6 +2048,7 @@ export interface SceneComparisonRow {
   interactionRate: number;
   newUsers: number;
   returningUsers: number;
+  activeUsers: number;
 }
 
 export function computeSceneComparisonStats(
@@ -2080,20 +2084,23 @@ export function computeSceneComparisonStats(
     }
   }
 
-  // 1. Identify all users and their first seen date/scene (Project Level)
-  const userFirstSeen = new Map<string, { time: Date; sceneId: number }>();
+  // 1. Identify all users and their first seen date/scene (Project Level) based on CLICKS
+  const userFirstSeen = new Map<string, { time: Date; sceneId: number | null }>();
 
-  // Sort scans to ensure we find the true first scan
-  const sortedScans = [...data.scans].sort((a, b) => a.time.getTime() - b.time.getTime());
+  // Sort clicks to ensure we find the true first click
+  const sortedClicks = [...data.clicks]
+    .filter((c) => Boolean(c.codeName))
+    .sort((a, b) => a.time.getTime() - b.time.getTime());
 
-  for (const scan of sortedScans) {
-    if (scan.coordinateSystemId === null) continue;
-    const sceneInfo = csMap.get(scan.coordinateSystemId);
-    if (!sceneInfo) continue;
+  for (const click of sortedClicks) {
+    const userId = click.codeName!.trim();
+    if (!userId) continue;
 
-    const userId = scan.clientId;
+    const sceneInfo = objMap.get(click.objId);
+    const sceneId = sceneInfo?.sceneId ?? null;
+
     if (!userFirstSeen.has(userId)) {
-      userFirstSeen.set(userId, { time: scan.time, sceneId: sceneInfo.sceneId });
+      userFirstSeen.set(userId, { time: click.time, sceneId });
     }
   }
 
@@ -2119,6 +2126,15 @@ export function computeSceneComparisonStats(
     }
   >();
 
+  // Unattributed Stats
+  const unattributedStat = {
+    sceneName: "Unattributed",
+    scans: 0,
+    clicks: 0,
+    activeUsersSet: new Set<string>(),
+    newUsersSet: new Set<string>(),
+  };
+
   // Helper to get or create scene stat
   const getSceneStat = (sceneId: number, sceneName: string) => {
     let stat = sceneStats.get(sceneId);
@@ -2137,51 +2153,56 @@ export function computeSceneComparisonStats(
 
   // Process Scans
   for (const scan of rangeScans) {
-    if (scan.coordinateSystemId === null) continue;
-    const sceneInfo = csMap.get(scan.coordinateSystemId);
-    if (!sceneInfo) continue;
-
-    const stat = getSceneStat(sceneInfo.sceneId, sceneInfo.sceneName);
-    stat.scans++;
-
-    const userId = scan.clientId;
-    stat.activeUsersSet.add(userId);
-
-    const firstSeen = userFirstSeen.get(userId);
-    if (firstSeen && firstSeen.sceneId === sceneInfo.sceneId && firstSeen.time >= start) {
-      stat.newUsersSet.add(userId);
+    let stat = unattributedStat;
+    if (scan.coordinateSystemId !== null) {
+      const sceneInfo = csMap.get(scan.coordinateSystemId);
+      if (sceneInfo) {
+        stat = getSceneStat(sceneInfo.sceneId, sceneInfo.sceneName);
+      }
     }
+    stat.scans++;
   }
 
   // Process Clicks
   for (const click of rangeClicks) {
+    let stat = unattributedStat;
     const sceneInfo = objMap.get(click.objId);
-    if (!sceneInfo) continue;
-
-    const stat = getSceneStat(sceneInfo.sceneId, sceneInfo.sceneName);
+    if (sceneInfo) {
+      stat = getSceneStat(sceneInfo.sceneId, sceneInfo.sceneName);
+    }
     stat.clicks++;
 
-    // Note: Clicks also imply active users, but usually Scans cover it. 
-    // If a user clicks without scanning (possible in some flows?), we should add them.
-    // But `clientId` is on Scan, `codeName` is on Click.
-    // Assuming codeName is userId.
-    if (click.codeName) {
-      stat.activeUsersSet.add(click.codeName);
+    const userId = click.codeName?.trim();
+    if (userId) {
+      stat.activeUsersSet.add(userId);
+
+      const firstSeen = userFirstSeen.get(userId);
+      // If user first seen in this range AND (attributed to this scene OR (unattributed and first seen was unattributed))
+      if (firstSeen && firstSeen.time >= start && firstSeen.time <= end) {
+        if (sceneInfo) {
+          // For attributed scene: check if first seen was in this scene
+          if (firstSeen.sceneId === sceneInfo.sceneId) {
+            stat.newUsersSet.add(userId);
+          }
+        } else {
+          // For unattributed: check if first seen was also unattributed
+          if (firstSeen.sceneId === null) {
+            stat.newUsersSet.add(userId);
+          }
+        }
+      }
     }
   }
 
-  // Convert to array
-  const result: SceneComparisonRow[] = [];
+  const rows: SceneComparisonRow[] = [];
+
   for (const [sceneId, stat] of sceneStats.entries()) {
     const newUsers = stat.newUsersSet.size;
     const activeUsers = stat.activeUsersSet.size;
-    // Returning Users = Active Users - New Users (attributed to this scene)
-    // Note: This definition of "Returning" means "Users active in this scene who were NOT new to the project in this scene".
-    // This includes users who are New to the project but first visited ANOTHER scene.
     // This seems fair for a per-scene breakdown.
     const returningUsers = Math.max(0, activeUsers - newUsers);
 
-    result.push({
+    rows.push({
       sceneId,
       sceneName: stat.sceneName,
       scans: stat.scans,
@@ -2189,10 +2210,213 @@ export function computeSceneComparisonStats(
       interactionRate: stat.scans > 0 ? stat.clicks / stat.scans : 0,
       newUsers: newUsers,
       returningUsers: returningUsers,
+      activeUsers: activeUsers,
     });
   }
 
-  return result.sort((a, b) => b.scans - a.scans);
+  // Add Unattributed row if it has data
+  if (
+    unattributedStat.scans > 0 ||
+    unattributedStat.clicks > 0 ||
+    unattributedStat.activeUsersSet.size > 0
+  ) {
+    const newUsers = unattributedStat.newUsersSet.size;
+    const activeUsers = unattributedStat.activeUsersSet.size;
+    const returningUsers = activeUsers - newUsers;
+
+    rows.push({
+      sceneId: -1, // Special ID for Unattributed
+      sceneName: "Unattributed",
+      scans: unattributedStat.scans,
+      clicks: unattributedStat.clicks,
+      interactionRate:
+        unattributedStat.scans > 0
+          ? unattributedStat.clicks / unattributedStat.scans
+          : 0,
+      newUsers,
+      returningUsers: Math.max(0, returningUsers),
+      activeUsers,
+    });
+  }
+
+  return rows.sort((a, b) => b.scans - a.scans);
+}
+
+export interface LightPerformanceRow {
+  lightId: number;
+  coordinateSystemNames: string[];
+  sceneNames: string[];
+  scans: number;
+  clicks: number;
+  newUsers: number;
+  returningUsers: number;
+}
+
+export function computeLightPerformanceStats(
+  data: DashboardData,
+  startDate: Date,
+  endDate: Date
+): LightPerformanceRow[] {
+  const start = startOfDay(startDate);
+  const end = endOfDay(endDate);
+
+  // 1. Identify valid scenes from projects (to filter relevant data)
+  const validSceneIds = new Set<number>();
+  for (const p of data.projects) {
+    for (const s of p.scenes) {
+      const match = s.match(/^(\d+)/);
+      if (match) validSceneIds.add(Number(match[1]));
+    }
+  }
+
+  // Map CoordinateSystemId -> Info
+  const csMap = new Map<number, { name: string; sceneId: number | null; sceneName: string | null }>();
+  for (const cs of data.coordinateSystems) {
+    csMap.set(cs.id, {
+      name: cs.name,
+      sceneId: cs.sceneId,
+      sceneName: cs.sceneName,
+    });
+  }
+
+  // 2. Identify all users and their first seen date (Project Level)
+  // We need this to determine if a user is "New" to the project at a specific LightID
+  const userFirstSeenProject = new Map<string, Date>();
+  const sortedAllScans = [...data.scans].sort((a, b) => a.time.getTime() - b.time.getTime());
+  for (const scan of sortedAllScans) {
+    const userId = scan.clientId;
+    if (!userFirstSeenProject.has(userId)) {
+      userFirstSeenProject.set(userId, scan.time);
+    }
+  }
+
+  // 3. Filter data in range
+  const rangeScans = data.scans.filter((s) => s.time >= start && s.time <= end);
+  const rangeClicks = data.clicks.filter((c) => c.time >= start && c.time <= end);
+
+  // 4. Initialize Stats Map by LightID
+  const stats = new Map<
+    number,
+    {
+      lightId: number;
+      csNames: Set<string>;
+      sceneNames: Set<string>;
+      scans: number;
+      clicks: number;
+      activeUsers: Set<string>;
+      newUsers: Set<string>;
+    }
+  >();
+
+  const getStat = (lightId: number) => {
+    let stat = stats.get(lightId);
+    if (!stat) {
+      stat = {
+        lightId,
+        csNames: new Set(),
+        sceneNames: new Set(),
+        scans: 0,
+        clicks: 0,
+        activeUsers: new Set(),
+        newUsers: new Set(),
+      };
+      stats.set(lightId, stat);
+    }
+    return stat;
+  };
+
+  // 5. Process Scans
+  // We also build a map of User -> Last Scan Time/LightID for Click attribution
+  // Note: For click attribution, we need scans BEFORE the click, possibly outside the range.
+  // So we might need to look at ALL scans for attribution, but only count stats for range scans.
+  // Let's build a "User Scan History" first.
+  const userScanHistory = new Map<string, { time: Date; lightId: number }[]>();
+  for (const scan of sortedAllScans) {
+    const userId = scan.clientId;
+    if (!userScanHistory.has(userId)) {
+      userScanHistory.set(userId, []);
+    }
+    userScanHistory.get(userId)!.push({ time: scan.time, lightId: scan.ligId });
+  }
+
+  for (const scan of rangeScans) {
+    const stat = getStat(scan.ligId);
+    stat.scans++;
+    stat.activeUsers.add(scan.clientId);
+
+    // Metadata
+    if (scan.coordinateSystemId) {
+      const cs = csMap.get(scan.coordinateSystemId);
+      if (cs) {
+        stat.csNames.add(cs.name);
+        if (cs.sceneName) stat.sceneNames.add(cs.sceneName);
+      }
+    }
+
+    // New User Check: Is this the first time we see this user in the PROJECT?
+    // And is this scan the one that established them as new?
+    // Or is "New User" defined as "First time seen at THIS LightID"?
+    // The user request implies "New Users" in the context of the table.
+    // Usually "New Users" means "New to the Project".
+    // If a user visits Light A then Light B, they are New at Light A, Returning at Light B.
+    // Let's stick to "New to Project" definition, attributed to the LightID where they first appeared.
+    const firstSeen = userFirstSeenProject.get(scan.clientId);
+    if (firstSeen && firstSeen.getTime() === scan.time.getTime()) {
+      stat.newUsers.add(scan.clientId);
+    }
+  }
+
+  // 6. Process Clicks (Attribute to LightID)
+  for (const click of rangeClicks) {
+    const userId = click.codeName?.trim();
+    if (!userId) continue;
+
+    // Find the latest scan before this click
+    const history = userScanHistory.get(userId);
+    if (!history) continue; // Should not happen if user scanned
+
+    // Binary search or linear search (since sorted) for the scan just before click.time
+    // Since history is sorted by time:
+    let bestScan: { time: Date; lightId: number } | null = null;
+    // Optimization: history is sorted. We want max(t) where t <= click.time
+    // We can iterate backwards or use binary search. Linear backwards is fine for small history.
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].time <= click.time) {
+        bestScan = history[i];
+        break;
+      }
+    }
+
+    // If we found a scan, and it's within a reasonable window (e.g. 1 hour? or just latest?)
+    // Let's assume just latest for now, as sessions can be long.
+    if (bestScan) {
+      const stat = getStat(bestScan.lightId);
+      stat.clicks++;
+      stat.activeUsers.add(userId);
+      // Note: We don't re-evaluate "New User" for clicks, as that's scan-based.
+    }
+  }
+
+  // 7. Format Output
+  const rows: LightPerformanceRow[] = [];
+  for (const stat of stats.values()) {
+    const newUsers = stat.newUsers.size;
+    const activeUsers = stat.activeUsers.size;
+    // Returning Users = Total Active Users - New Users
+    const returningUsers = Math.max(0, activeUsers - newUsers);
+
+    rows.push({
+      lightId: stat.lightId,
+      coordinateSystemNames: Array.from(stat.csNames).sort(),
+      sceneNames: Array.from(stat.sceneNames).sort(),
+      scans: stat.scans,
+      clicks: stat.clicks,
+      newUsers,
+      returningUsers,
+    });
+  }
+
+  return rows.sort((a, b) => b.scans - a.scans);
 }
 
 export interface SceneTimeComparisonRow {
@@ -2274,4 +2498,127 @@ export function computeSceneTimeStats(data: DashboardData): SceneTimeComparisonR
   }
 
   return Array.from(sceneStats.values()).sort((a, b) => b.total - a.total);
+}
+
+export interface MergedPerformanceRow {
+  lightId: number;
+  coordinateSystemNames: string[];
+  sceneName: string;
+  scans: number;
+  clicks: number;
+  intensity: number;
+  newUsers: number;
+  returningUsers: number;
+}
+
+export function computeMergedPerformanceStats(
+  data: DashboardData,
+  lightConfigs: LightConfig[],
+  startDate: Date,
+  endDate: Date
+): MergedPerformanceRow[] {
+  const start = startOfDay(startDate);
+  const end = endOfDay(endDate);
+
+  // 1. Build Light ID -> Scans map
+  const lightScans = new Map<number, number>();
+  for (const scan of data.scans) {
+    if (scan.time < start || scan.time > end) continue;
+    lightScans.set(scan.ligId, (lightScans.get(scan.ligId) ?? 0) + 1);
+  }
+
+  // 2. Build Scene ID -> Stats map (Clicks, Users)
+  const sceneStats = new Map<number, { clicks: number; activeUsers: Set<string>; newUsers: Set<string> }>();
+
+  // Helper to get scene stat
+  const getSceneStat = (sceneId: number) => {
+    let stat = sceneStats.get(sceneId);
+    if (!stat) {
+      stat = { clicks: 0, activeUsers: new Set(), newUsers: new Set() };
+      sceneStats.set(sceneId, stat);
+    }
+    return stat;
+  };
+
+  // Process clicks to populate scene stats
+  const objectMeta = buildObjectMetaMap(data);
+  const firstClickByUser = data.firstClickByUser;
+
+  for (const click of data.clicks) {
+    if (click.time < start || click.time > end) continue;
+
+    const meta = objectMeta.get(click.objId);
+    if (!meta || meta.sceneId === null) continue;
+
+    const stat = getSceneStat(meta.sceneId);
+    stat.clicks++;
+
+    if (click.codeName) {
+      stat.activeUsers.add(click.codeName);
+      const firstTime = firstClickByUser[click.codeName];
+      if (firstTime && firstTime >= start && firstTime <= end) {
+        stat.newUsers.add(click.codeName);
+      }
+    }
+  }
+
+  // 3. Iterate LightConfigs to build rows
+  const rows: MergedPerformanceRow[] = [];
+
+  for (const config of lightConfigs) {
+    const lightId = Number(config.lightId);
+    if (!Number.isFinite(lightId)) continue;
+
+    const scans = lightScans.get(lightId) ?? 0;
+
+    // Parse Coordinate System Names
+    // Keep full "ID-Name" format as requested
+    const csNames = config.coordinates;
+
+    // If no scenes, add a row with empty scene info
+    if (config.scenes.length === 0) {
+      rows.push({
+        lightId,
+        coordinateSystemNames: csNames,
+        sceneName: "-",
+        scans,
+        clicks: 0,
+        intensity: 0,
+        newUsers: 0,
+        returningUsers: 0
+      });
+      continue;
+    }
+
+    // For each scene, add a row
+    for (const sceneStr of config.scenes) {
+      // Parse Scene ID for stats lookup, but keep full name for display
+      const match = sceneStr.match(/^(\d+)(?:-(.*))?$/);
+      let sceneId = 0;
+
+      if (match) {
+        sceneId = Number(match[1]);
+      }
+
+      const stat = sceneStats.get(sceneId);
+      const clicks = stat?.clicks ?? 0;
+      const newUsers = stat?.newUsers.size ?? 0;
+      const activeUsers = stat?.activeUsers.size ?? 0;
+      const returningUsers = activeUsers - newUsers;
+      const intensity = scans > 0 ? clicks / scans : 0;
+
+      rows.push({
+        lightId,
+        coordinateSystemNames: csNames,
+        sceneName: sceneStr, // Keep full "ID-Name"
+        scans,
+        clicks,
+        intensity,
+        newUsers,
+        returningUsers
+      });
+    }
+  }
+
+  return rows;
 }

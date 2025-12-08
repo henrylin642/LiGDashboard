@@ -18,6 +18,8 @@ const FIELD_LAT_LON =
   import.meta.env.VITE_AIRTABLE_PROJECT_FIELD_LAT_LON?.trim() || "Latitude and Longitude";
 const FIELD_OWNER_EMAIL =
   import.meta.env.VITE_AIRTABLE_PROJECT_FIELD_OWNER_EMAIL?.trim() || "Owner Email";
+const FIELD_LIGHT_CONFIGS =
+  import.meta.env.VITE_AIRTABLE_PROJECT_FIELD_LIGHT_CONFIGS?.trim() || "Light Configs";
 
 export interface AirtableProject {
   id: string;
@@ -31,6 +33,7 @@ export interface AirtableProject {
   isActive: boolean;
   latLon: string | null;
   ownerEmails: string[];
+  lightConfigs: string | null; // JSON string
   createdTime: string;
 }
 
@@ -98,6 +101,7 @@ function mapRecord(record: AirtableRecord<ProjectFields>): AirtableProject {
     isActive: coerceBoolean(record.fields[FIELD_ACTIVE]),
     latLon: coerceString(record.fields[FIELD_LAT_LON]),
     ownerEmails: parseList(record.fields[FIELD_OWNER_EMAIL]),
+    lightConfigs: coerceString(record.fields[FIELD_LIGHT_CONFIGS]),
     createdTime: record.createdTime,
   };
 }
@@ -126,6 +130,7 @@ export interface SaveProjectPayload {
   isActive: boolean;
   latLon: string | null;
   ownerEmails: string[];
+  lightConfigs: string | null;
 }
 
 function toFields(payload: SaveProjectPayload): ProjectFields {
@@ -146,6 +151,7 @@ function toFields(payload: SaveProjectPayload): ProjectFields {
   fields[FIELD_ACTIVE] = payload.isActive;
   fields[FIELD_LAT_LON] = payload.latLon || null;
   fields[FIELD_OWNER_EMAIL] = stringifyList(payload.ownerEmails);
+  fields[FIELD_LIGHT_CONFIGS] = payload.lightConfigs || null;
   return fields;
 }
 

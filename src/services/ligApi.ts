@@ -1,4 +1,4 @@
-import { fetchCsv } from "../utils/csv";
+
 
 type Token = string;
 
@@ -60,6 +60,18 @@ export interface CoordinateSystemDetail {
   raw?: unknown;
 }
 
+export interface LightDetail {
+  id: string;
+  name: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  fieldId?: number | null;
+  coordinateSystemId?: number | null;
+  coordinateSystemName?: string | null;
+  updatedAt?: string | null;
+  raw?: unknown;
+}
+
 export async function loginLigDashboard(
   email: string,
   password: string
@@ -85,20 +97,14 @@ export async function loginLigDashboard(
 
 export async function fetchLightOptions(token?: Token): Promise<LightOption[]> {
   if (!token) {
-    return fetchCsv("/api/data/light.csv", (row) => {
-      const id = row["Id"]?.trim();
-      if (!id) return null;
-      const name = row["Name"]?.trim() || row["Location"]?.trim() || "";
-      const label = name ? `${id} - ${name}` : id;
-      return { id, label } as LightOption;
-    });
+    return [];
   }
   const headers: Record<string, string> = {};
   headers.Authorization = `Bearer ${token}`;
   try {
     const endpoints = [
-      `${API_BASE}/api/v1/lights`,
-      `${API_BASE}/api/v1/lightids`,
+      `${API_BASE}/api/v1/lights?limit=10000`,
+      `${API_BASE}/api/v1/lightids?limit=10000`,
     ];
 
     let lastError: Error | null = null;
@@ -146,14 +152,8 @@ export async function fetchLightOptions(token?: Token): Promise<LightOption[]> {
 
     throw new Error("無法取得燈具資料");
   } catch (error) {
-    const rows = await fetchCsv("/api/data/light.csv", (row) => {
-      const id = row["Id"]?.trim();
-      if (!id) return null;
-      const name = row["Name"]?.trim() || row["Location"]?.trim() || "";
-      const label = name ? `${id} - ${name}` : id;
-      return { id, label } as LightOption;
-    });
-    return rows;
+    console.error("fetchLightOptions failed", error);
+    return [];
   }
 }
 
@@ -205,26 +205,14 @@ export async function fetchCoordinatesForLight(
     if (lastError) throw lastError;
     throw new Error("無法取得座標資料");
   } catch (error) {
-    const rows = await fetchCsv("/api/data/scan_coordinate.csv", (row) => {
-      const rowLightId = row["Light ID"]?.trim();
-      if (rowLightId !== String(lightId).trim()) return null;
-      const id = row["Id"]?.trim();
-      const name = `${row["Location X"] ?? ""},${row["Location Z"] ?? ""}`;
-      if (!id) return null;
-      return { id, name } as CoordinateOption;
-    });
-    return rows;
+    console.warn("API fetch failed for coordinates:", error);
+    return [];
   }
 }
 
 export async function fetchSceneOptions(token?: Token): Promise<SceneOption[]> {
   if (!token) {
-    return fetchCsv("/api/data/scene.csv", (row) => {
-      const id = row["Id"]?.trim();
-      if (!id) return null;
-      const name = row["Name"]?.trim() || id;
-      return { id, name } as SceneOption;
-    });
+    return [];
   }
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -250,14 +238,10 @@ export async function fetchSceneOptions(token?: Token): Promise<SceneOption[]> {
         return { id, name } as SceneOption;
       })
       .filter(Boolean) as SceneOption[];
+
   } catch (error) {
-    const rows = await fetchCsv("/api/data/scene.csv", (row) => {
-      const id = row["Id"]?.trim();
-      if (!id) return null;
-      const name = row["Name"]?.trim() || id;
-      return { id, name } as SceneOption;
-    });
-    return rows;
+    console.error("fetchSceneOptions failed", error);
+    return [];
   }
 }
 
@@ -358,76 +342,126 @@ export async function fetchCoordinateSystemsWithMeta(
     .filter(Boolean) as CoordinateSystemDetail[];
 }
 
-export async function fetchArObjectsWithMeta(
+export async function fetchArObjectsForLight(
+  lightId: number,
   token?: Token
 ): Promise<ArObjectDetail[]> {
   if (!token) return [];
-  const res = await fetch(`${API_BASE}/api/v1/ar_objects`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    throw new Error(`${res.status} ${await res.text()}`);
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/ar_objects_list/${lightId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      // 404 means no data for this light/coordinate system
+      // 406 means not acceptable (likely no JSON representation), treat as empty
+      if (res.status === 404 || res.status === 406) return [];
+      throw new Error(`${res.status} ${await res.text()}`);
+    }
+    const json = await res.json();
+    const data = Array.isArray(json) ? json : (json.scenes || []);
+
+    if (!Array.isArray(data)) return [];
+
+    return data.flatMap((sceneItem: any) => {
+      const sceneId = sceneItem.scene_id;
+      const sceneName = sceneItem.scene_name; // Assuming it might be there or in coordinate_system
+
+      if (!Array.isArray(sceneItem.ar_objects)) return [];
+
+      return sceneItem.ar_objects.map((item: any) => {
+        const id = String(item.id ?? item.obj_id ?? "").trim();
+        if (!id) return null;
+        const name = String(item.name ?? item.obj_name ?? id).trim();
+
+        return {
+          id,
+          name,
+          sceneId: sceneId ?? item.scene_id,
+          sceneName: sceneName ?? item.scene_name,
+          location: item.location,
+          // Add other fields if needed
+        } as ArObjectDetail;
+      }).filter(Boolean) as ArObjectDetail[];
+    });
+  } catch (error) {
+    // Suppress warnings for expected errors to avoid console spam
+    // console.warn(`[LiG] Failed to fetch AR objects for light ${lightId}`, error);
+    return [];
   }
-  const data = await res.json();
-  const list = Array.isArray(data)
-    ? data
-    : Array.isArray((data as any).ar_objects)
-      ? (data as any).ar_objects
-      : [];
-  return list
-    .map((item: any) => {
-      const id = String(item.id ?? item.obj_id ?? "").trim();
-      if (!id) return null;
-      const name = String(item.name ?? item.obj_name ?? id).trim();
-      const sceneIdRaw =
-        item.scene_id ??
-        item.sceneId ??
-        item.scene?.id ??
-        item.scene?.scene_id ??
-        null;
-      const sceneId =
-        sceneIdRaw === null || sceneIdRaw === undefined
-          ? null
-          : Number(sceneIdRaw);
-      const sceneName =
-        item.scene_name ??
-        item.sceneName ??
-        item.scene?.name ??
-        item.scene?.scene_name ??
-        null;
-      const location = item.location;
-      const locationX =
-        typeof location?.x === "number"
-          ? location.x
-          : typeof location?.X === "number"
-            ? location.X
-            : null;
-      const locationY =
-        typeof location?.y === "number"
-          ? location.y
-          : typeof location?.Y === "number"
-            ? location.Y
-            : null;
-      const locationZ =
-        typeof location?.z === "number"
-          ? location.z
-          : typeof location?.Z === "number"
-            ? location.Z
-            : null;
-      return {
-        id,
-        name,
-        sceneId: Number.isFinite(sceneId) ? Number(sceneId) : null,
-        sceneName: sceneName ? String(sceneName).trim() : null,
-        location:
-          locationX === null && locationY === null && locationZ === null
-            ? null
-            : { x: locationX, y: locationY, z: locationZ },
-        raw: item,
-      } as ArObjectDetail;
-    })
-    .filter(Boolean) as ArObjectDetail[];
 }
+
+export async function fetchScenesForLight(
+  lightId: string,
+  token?: Token
+): Promise<SceneOption[]> {
+  if (!token) return [];
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/ar_objects_list/${lightId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      if (res.status === 404 || res.status === 406) return [];
+      throw new Error(`${res.status} ${await res.text()}`);
+    }
+    const json = await res.json();
+    const scenesList = Array.isArray(json) ? json : (json.scenes || []);
+
+    if (!Array.isArray(scenesList)) return [];
+
+    const uniqueScenes = new Map<string, string>();
+    scenesList.forEach((item: any) => {
+      const id = String(item.scene_id ?? "").trim();
+      // The API returns 'name' for the scene name in the scenes list structure
+      // based on the JSON: { scenes: [ { scene_id: ..., name: "Scene Name", ... } ] }
+      const name = String(item.name ?? item.scene_name ?? "").trim();
+
+      if (id) {
+        // If we already have this ID, only update if we found a name (and didn't have one before)
+        if (!uniqueScenes.has(id) || (name && !uniqueScenes.get(id))) {
+          uniqueScenes.set(id, name);
+        }
+      }
+    });
+
+    return Array.from(uniqueScenes.entries()).map(([id, name]) => ({
+      id,
+      name
+    }));
+  } catch (error) {
+    console.warn(`[LiG] Failed to fetch scenes for light ${lightId}`, error);
+    return [];
+  }
+}
+
+export async function fetchArObjectsWithMeta(
+  token?: Token,
+  lightIds: number[] = []
+): Promise<ArObjectDetail[]> {
+  if (!token) return [];
+  if (lightIds.length === 0) return [];
+
+  // Deduplicate lightIds
+  const uniqueIds = Array.from(new Set(lightIds));
+
+  // Fetch in batches to avoid overwhelming the server/browser
+  const BATCH_SIZE = 5;
+  const results: ArObjectDetail[][] = [];
+
+  for (let i = 0; i < uniqueIds.length; i += BATCH_SIZE) {
+    const batch = uniqueIds.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.all(
+      batch.map(id => fetchArObjectsForLight(id, token).catch(err => {
+        console.warn(`[LiG] Failed to fetch AR objects for light ${id}`, err);
+        return [];
+      }))
+    );
+    results.push(...batchResults);
+  }
+
+  return results.flat();
+}
+
+
 
 export async function fetchArObjectById(
   objId: string,
@@ -491,4 +525,37 @@ export async function fetchArObjectById(
         : { x: locationX, y: locationY, z: locationZ },
     raw: item,
   };
+}
+
+export async function fetchLights(token?: Token): Promise<LightDetail[]> {
+  if (!token) return [];
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/lights?limit=10000`, { headers });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+
+    const data = await res.json();
+    const items = Array.isArray(data) ? data : (data.lights || []);
+
+    return items.map((item: any) => {
+      const id = String(item.id ?? item.light_id ?? "").trim();
+      if (!id) return null;
+
+      return {
+        id,
+        name: String(item.name ?? item.label ?? "").trim(),
+        latitude: Number(item.latitude) || null,
+        longitude: Number(item.longitude) || null,
+        fieldId: Number(item.field_id ?? item.group_id) || null,
+        coordinateSystemId: Number(item.coordinate_system_id) || null,
+        coordinateSystemName: String(item.coordinate_system_name ?? "").trim() || null,
+        updatedAt: item.updated_at ?? null,
+        raw: item
+      } as LightDetail;
+    }).filter(Boolean) as LightDetail[];
+  } catch (error) {
+    console.error("fetchLights failed", error);
+    return [];
+  }
 }

@@ -8,13 +8,14 @@ import {
 } from "react";
 import {
   fetchCsv,
-  parseBoolean,
   parseDate,
-  parseJsonArray,
-  parseLatLon,
   parseNumber,
 } from "../utils/csv";
-import { fetchArObjectsWithMeta } from "../services/ligApi";
+import {
+  fetchArObjectsWithMeta,
+  fetchLights,
+  fetchCoordinateSystemsWithMeta
+} from "../services/ligApi";
 import { fetchProjects as fetchAirtableProjects } from "../services/airtable";
 import type {
   ArObjectRecord,
@@ -26,6 +27,7 @@ import type {
   Project,
   ScanCoordinateRecord,
   ScanRecord,
+  LightConfig,
 } from "../types";
 
 const DashboardDataContext = createContext<DashboardDataState>({
@@ -69,17 +71,23 @@ export function DashboardDataProvider({
           lights,
           coordinateSystems,
           clicks,
-          arObjects,
           scanCoordinates,
         ] = await Promise.all([
           loadProjects(),
           loadScans(),
-          loadLights(),
-          loadCoordinateSystems(),
+          loadLights(ligToken),
+          loadCoordinateSystems(ligToken),
           loadClicks(),
-          loadArObjects(ligToken || undefined),
           loadScanCoordinates(),
         ]);
+
+        const allLightIds = new Set<number>();
+        projects.forEach((p) => p.lightIds.forEach((id) => allLightIds.add(id)));
+        lights.forEach((l) => allLightIds.add(l.ligId));
+
+        // Initial load: DO NOT load AR objects for all lights to avoid 404 storm.
+        // We will lazy load them when needed.
+        const arObjects: ArObjectRecord[] = [];
 
         if (!isMounted) return;
 
@@ -127,10 +135,85 @@ export function DashboardDataProvider({
     };
   }, [ligToken]);
 
-  const value = useMemo(() => state, [state]);
+  // Track which light IDs have been loaded to avoid duplicate fetches
+  const [loadedLightIds, setLoadedLightIds] = useState<Set<number>>(new Set());
+
+  const loadArObjectsForLights = async (lightIds: number[]) => {
+    if (!ligToken) return;
+
+    // Filter out already loaded IDs
+    const newIds = lightIds.filter(id => !loadedLightIds.has(id));
+    if (newIds.length === 0) return;
+
+    // Mark as loaded immediately to prevent race conditions
+    setLoadedLightIds(prev => {
+      const next = new Set(prev);
+      newIds.forEach(id => next.add(id));
+      return next;
+    });
+
+    try {
+      const newArObjects = await loadArObjects(ligToken, newIds);
+
+      setState(prev => {
+        if (prev.status !== "ready" || !prev.data) return prev;
+
+        // Merge new AR objects, avoiding duplicates
+        const existingIds = new Set(prev.data.arObjects.map(o => o.id));
+        const uniqueNewObjects = newArObjects.filter(o => !existingIds.has(o.id));
+
+        if (uniqueNewObjects.length === 0) return prev;
+
+        return {
+          ...prev,
+          data: {
+            ...prev.data,
+            arObjects: [...prev.data.arObjects, ...uniqueNewObjects]
+          }
+        };
+      });
+    } catch (e) {
+      console.error("Failed to lazy load AR objects", e);
+    }
+  };
+
+  const reloadProjects = async () => {
+    try {
+      const projects = await loadProjects();
+
+      setState((prev) => {
+        if (prev.status !== "ready" || !prev.data) return prev;
+
+        const projectById: Record<number, Project> = {};
+        const lightToProjectIds: Record<number, number[]> = {};
+
+        for (const project of projects) {
+          projectById[project.projectId] = project;
+          for (const lightId of project.lightIds) {
+            if (!lightToProjectIds[lightId]) {
+              lightToProjectIds[lightId] = [];
+            }
+            lightToProjectIds[lightId].push(project.projectId);
+          }
+        }
+
+        return {
+          ...prev,
+          data: {
+            ...prev.data,
+            projects,
+            projectById,
+            lightToProjectIds,
+          },
+        };
+      });
+    } catch (error) {
+      console.error("[DashboardData] Failed to reload projects", error);
+    }
+  };
 
   return (
-    <DashboardDataContext.Provider value={value}>
+    <DashboardDataContext.Provider value={{ ...state, loadArObjectsForLights, reloadProjects }}>
       {children}
     </DashboardDataContext.Provider>
   );
@@ -155,6 +238,17 @@ async function loadProjects(): Promise<Project[]> {
             latLon = { lat, lon };
           }
         }
+        let lightConfigs: LightConfig[] = [];
+        if (item.lightConfigs) {
+          try {
+            const parsed = JSON.parse(item.lightConfigs);
+            if (Array.isArray(parsed)) {
+              lightConfigs = parsed;
+            }
+          } catch (e) {
+            console.warn("[DashboardData] Failed to parse lightConfigs", e);
+          }
+        }
         projects.push({
           projectId: parsedId,
           name: item.projectName.trim() || `Project ${parsedId}`,
@@ -168,6 +262,7 @@ async function loadProjects(): Promise<Project[]> {
           isActive: item.isActive,
           latLon,
           ownerEmails: [...(item.ownerEmails ?? [])].sort(),
+          lightConfigs,
         });
       }
       if (projects.length > 0) {
@@ -175,31 +270,13 @@ async function loadProjects(): Promise<Project[]> {
       }
     }
   } catch (error) {
-    console.warn("[DashboardData] 讀取 Airtable projects 失敗，改用 CSV。", error);
+    console.error("[DashboardData] 讀取 Airtable projects 失敗", error);
+    throw error; // Re-throw to let the main load function handle it
   }
 
-  const rows = await fetchCsv<Project>("/api/data/projects.csv", (row) => {
-    const projectId = parseNumber(row["ProjectID"]);
-    if (projectId === null) return null;
-
-    const lightIds = parseJsonArray(row["Light ID"])
-      .map((item) => parseNumber(item))
-      .filter((val): val is number => val !== null);
-
-    return {
-      projectId,
-      name: row["Project Name"]?.trim() ?? `Project ${projectId}`,
-      startDate: parseDate(row["Start Date"]),
-      endDate: parseDate(row["End Date"]),
-      coordinates: parseJsonArray(row["Coordinates"]),
-      lightIds,
-      scenes: parseJsonArray(row["Scenes"]),
-      isActive: parseBoolean(row["Is Active"]),
-      latLon: parseLatLon(row["Latitude and Longitude"]),
-      ownerEmails: parseJsonArray(row["Owner Email"]).sort(),
-    };
-  });
-  return rows;
+  // Fallback to CSV is disabled per user request "Unless local backup is performed, forbid using local Data"
+  // const rows = await fetchCsv<Project>("/api/data/projects.csv", ...);
+  return [];
 }
 
 async function loadScans(): Promise<ScanRecord[]> {
@@ -217,38 +294,39 @@ async function loadScans(): Promise<ScanRecord[]> {
   });
 }
 
-async function loadLights(): Promise<LightRecord[]> {
-  return fetchCsv<LightRecord>("/api/data/lights.csv", (row) => {
-    const ligId = parseNumber(row["Id"]);
-    if (ligId === null) return null;
+async function loadLights(token?: string): Promise<LightRecord[]> {
+  if (!token) return [];
+  const lights = await fetchLights(token);
+  return lights.map(l => {
+    const ligId = Number(l.id);
+    if (!Number.isFinite(ligId)) return null;
     return {
       ligId,
-      latitude: parseNumber(row["Latitude"]),
-      longitude: parseNumber(row["Longitude"]),
-      fieldId: parseNumber(row["Group"]),
-      coordinateSystemId: parseNumber(row["Id [Coordinate systems]"]),
-      coordinateSystemName: row["Name [Coordinate systems]"]?.trim() ?? null,
-      updatedAt: parseDate(row["Updated at"]),
-    };
-  });
+      latitude: l.latitude ?? 0,
+      longitude: l.longitude ?? 0,
+      fieldId: l.fieldId ?? 0,
+      coordinateSystemId: l.coordinateSystemId ?? 0,
+      coordinateSystemName: l.coordinateSystemName,
+      updatedAt: l.updatedAt ? new Date(l.updatedAt) : null
+    } as LightRecord;
+  }).filter(Boolean) as LightRecord[];
 }
 
-async function loadCoordinateSystems(): Promise<CoordinateSystemRecord[]> {
-  return fetchCsv<CoordinateSystemRecord>(
-    "/api/data/coordinate_systems.csv",
-    (row) => {
-      const id = parseNumber(row["Id"]);
-      if (id === null) return null;
-      return {
-        id,
-        name: row["Name"]?.trim() ?? "",
-        sceneId: parseNumber(row["Id [Scenes]"]),
-        sceneName: row["Name [Scenes]"]?.trim() ?? null,
-        createdAt: parseDate(row["Created at"]),
-        updatedAt: parseDate(row["Updated at"]),
-      };
-    }
-  );
+async function loadCoordinateSystems(token?: string): Promise<CoordinateSystemRecord[]> {
+  if (!token) return [];
+  const systems = await fetchCoordinateSystemsWithMeta(token);
+  return systems.map(s => {
+    const id = Number(s.id);
+    if (!Number.isFinite(id)) return null;
+    return {
+      id,
+      name: s.name,
+      sceneId: null, // API doesn't return bound scene ID directly in this endpoint usually, or it needs mapping
+      sceneName: null,
+      createdAt: null,
+      updatedAt: null
+    } as CoordinateSystemRecord;
+  }).filter(Boolean) as CoordinateSystemRecord[];
 }
 
 async function loadClicks(): Promise<ClickRecord[]> {
@@ -277,10 +355,13 @@ function buildFirstClickByUser(clicks: ClickRecord[]): Record<string, Date> {
   return result;
 }
 
-async function loadArObjects(token?: string): Promise<ArObjectRecord[]> {
+async function loadArObjects(
+  token?: string,
+  lightIds: number[] = []
+): Promise<ArObjectRecord[]> {
   if (token) {
     try {
-      const list = await fetchArObjectsWithMeta(token);
+      const list = await fetchArObjectsWithMeta(token, lightIds);
       if (list.length > 0) {
         return list.map((item) => {
           const idNum = Number(item.id);
@@ -297,69 +378,14 @@ async function loadArObjects(token?: string): Promise<ArObjectRecord[]> {
         }).filter(Boolean) as ArObjectRecord[];
       }
     } catch (error) {
-      console.warn("[DashboardData] 無法從 API 載入 AR objects，改用備援資料。", error);
+      console.warn("[DashboardData] 無法從 API 載入 AR objects", error);
     }
   }
 
-  return fetchCsv<ArObjectRecord>("/api/data/ar_object_2025-10-21_11h55m15.csv", (row) => {
-    const id = parseNumber(row["Id"]);
-    if (id === null) return null;
-    const { locationX, locationY, locationZ } = parseLocation(row["Location"]);
-    return {
-      id,
-      name: row["Name"]?.trim() ?? "",
-      sceneId: parseNumber(row["Id [Scene]"]),
-      sceneName: row["Name [Scene]"]?.trim() ?? null,
-      locationX,
-      locationY,
-      locationZ,
-    };
-  });
+  return [];
 }
 
 async function loadScanCoordinates(): Promise<ScanCoordinateRecord[]> {
-  return fetchCsv<ScanCoordinateRecord>("/api/data/scan_coordinate.csv", (row) => {
-    const id = parseNumber(row["Id"]);
-    if (id === null) return null;
-    const lightId = parseNumber(row["Light ID"]);
-    if (lightId === null) return null;
-    return {
-      id,
-      lightId,
-      locationX: parseNumber(row["Location X"]),
-      locationZ: parseNumber(row["Location Z"]),
-      createdAt: parseDate(row["Created at"]),
-    };
-  });
-}
-
-function parseLocation(value: string | undefined): {
-  locationX: number | null;
-  locationY: number | null;
-  locationZ: number | null;
-} {
-  if (!value) {
-    return { locationX: null, locationY: null, locationZ: null };
-  }
-
-  const match = value
-    .replace(/""/g, '"')
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .reduce<Record<string, number>>((acc, line) => {
-      const [key, rawVal] = line.split(":").map((part) => part.trim());
-      if (!key || rawVal === undefined) return acc;
-      const parsedVal = parseNumber(rawVal.replace(/"/g, ""));
-      if (parsedVal !== null) {
-        acc[key.toLowerCase()] = parsedVal;
-      }
-      return acc;
-    }, {});
-
-  return {
-    locationX: match["x"] ?? null,
-    locationY: match["y"] ?? null,
-    locationZ: match["z"] ?? null,
-  };
+  // No API available for scan coordinates yet
+  return [];
 }

@@ -9,6 +9,7 @@ export interface Project {
   isActive: boolean;
   latLon: { lat: number; lon: number } | null;
   ownerEmails: string[];
+  lightConfigs: LightConfig[];
 }
 
 export interface ScanRecord {
@@ -78,4 +79,14 @@ export interface DashboardDataState {
   status: "loading" | "ready" | "error";
   data?: DashboardData;
   error?: string;
+  loadArObjectsForLights?: (lightIds: number[]) => Promise<void>;
+  reloadProjects?: () => Promise<void>;
+}
+
+export interface LightConfig {
+  lightId: string;
+  coordinates: string[];
+  scenes: string[];
+  latitude?: number;
+  longitude?: number;
 }

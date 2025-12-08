@@ -1,6 +1,8 @@
 import express from 'express';
 import { google } from 'googleapis';
 import { Readable } from 'stream';
+import path from 'path';
+import fs from 'fs';
 
 const router = express.Router();
 
@@ -25,14 +27,37 @@ router.get('/:filename', async (req, res) => {
     const { filename } = req.params;
     const auth = getAuthClient();
 
-    if (!auth) {
-        console.error('[Drive] Missing Google Credentials');
-        return res.status(500).json({ error: 'Server misconfiguration: Missing Google Credentials' });
-    }
+    // Helper to serve local file
+    const serveLocalFile = async () => {
+        try {
+            // Assuming server is running in /server, so public is in ../public
+            // Adjust path based on where the compiled server runs. 
+            // If running via ts-node in server/src, it's ../../public
+            // If running via node in server/dist, it's ../../public
+            // Let's try to resolve from project root.
+            const localPath = path.resolve(__dirname, '../../../public/data', filename);
+            console.log(`[Drive] Trying local file: ${localPath}`);
 
-    if (!FOLDER_ID) {
-        console.error('[Drive] Missing Folder ID');
-        return res.status(500).json({ error: 'Server misconfiguration: Missing Drive Folder ID' });
+            if (fs.existsSync(localPath)) {
+                console.log(`[Drive] Serving local file: ${filename}`);
+                res.sendFile(localPath);
+                return true;
+            }
+            console.warn(`[Drive] Local file not found: ${localPath}`);
+            return false;
+        } catch (err) {
+            console.error(`[Drive] Error serving local file:`, err);
+            return false;
+        }
+    };
+
+    if (!auth || !FOLDER_ID) {
+        console.log('[Drive] Missing Google Credentials/Folder ID, falling back to local file');
+        const served = await serveLocalFile();
+        if (!served) {
+            return res.status(500).json({ error: 'Server misconfiguration: Missing Google Credentials and local file not found' });
+        }
+        return;
     }
 
     try {
@@ -48,8 +73,12 @@ router.get('/:filename', async (req, res) => {
 
         const files = listRes.data.files;
         if (!files || files.length === 0) {
-            console.warn(`[Drive] File not found: ${filename}`);
-            return res.status(404).json({ error: 'File not found' });
+            console.warn(`[Drive] File not found in Drive: ${filename}, trying local...`);
+            const served = await serveLocalFile();
+            if (!served) {
+                return res.status(404).json({ error: 'File not found' });
+            }
+            return;
         }
 
         const fileId = files[0].id!;
@@ -71,7 +100,11 @@ router.get('/:filename', async (req, res) => {
 
     } catch (error: any) {
         console.error('[Drive] Error:', error.message);
-        res.status(500).json({ error: 'Failed to fetch file from Drive' });
+        console.log('[Drive] Drive fetch failed, trying local file...');
+        const served = await serveLocalFile();
+        if (!served) {
+            res.status(500).json({ error: 'Failed to fetch file from Drive and local' });
+        }
     }
 });
 

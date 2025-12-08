@@ -19,6 +19,7 @@ const FIELD_MAP = {
     active: process.env.AIRTABLE_PROJECT_FIELD_ACTIVE || 'Is Active',
     latLon: process.env.AIRTABLE_PROJECT_FIELD_LAT_LON || 'Latitude and Longitude',
     ownerEmails: process.env.AIRTABLE_PROJECT_FIELD_OWNER_EMAIL || 'Owner Email',
+    lightConfigs: process.env.AIRTABLE_PROJECT_FIELD_LIGHT_CONFIGS || 'Light Configs',
 };
 
 router.get('/', async (req, res) => {
@@ -87,6 +88,7 @@ router.get('/', async (req, res) => {
                 isActive: Boolean(fields[FIELD_MAP.active]),
                 latLon: fields[FIELD_MAP.latLon] ? coerceString(fields[FIELD_MAP.latLon]) : null,
                 ownerEmails: parseList(fields[FIELD_MAP.ownerEmails]),
+                lightConfigs: fields[FIELD_MAP.lightConfigs] ? coerceString(fields[FIELD_MAP.lightConfigs]) : null,
             };
         });
 
@@ -106,7 +108,8 @@ router.post('/', async (req, res) => {
         });
         res.json(response.data);
     } catch (error: any) {
-        res.status(500).json({ error: 'Failed to create project' });
+        console.error('Error creating project:', error.response?.data || error.message);
+        res.status(500).json({ error: 'Failed to create project', details: error.response?.data || error.message });
     }
 });
 
@@ -119,7 +122,8 @@ router.patch('/:id', async (req, res) => {
         });
         res.json(response.data);
     } catch (error: any) {
-        res.status(500).json({ error: 'Failed to update project' });
+        console.error('Error updating project:', error.response?.data || error.message);
+        res.status(500).json({ error: 'Failed to update project', details: error.response?.data || error.message });
     }
 });
 
@@ -132,7 +136,8 @@ router.delete('/:id', async (req, res) => {
         });
         res.json(response.data);
     } catch (error: any) {
-        res.status(500).json({ error: 'Failed to delete project' });
+        console.error('Error deleting project:', error.response?.data || error.message);
+        res.status(500).json({ error: 'Failed to delete project', details: error.response?.data || error.message });
     }
 });
 

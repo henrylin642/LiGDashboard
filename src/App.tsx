@@ -8,6 +8,8 @@ import {
   format,
   startOfDay,
   startOfMonth,
+  startOfWeek,
+
   subDays,
   subMonths,
 } from "date-fns";
@@ -38,7 +40,9 @@ import {
   computeClickDaypartStats,
   computeProjectObjectAttribution,
   computeSceneComparisonStats,
+  computeLightPerformanceStats,
   computeSceneTimeStats,
+  computeMergedPerformanceStats,
   buildProjectScanIndex,
   buildProjectClickIndex,
   type ClickRankingRow,
@@ -55,11 +59,122 @@ import {
   type ClickDaypartStats,
   type ProjectObjectAttributionRow,
   type SceneComparisonRow,
+  type LightPerformanceRow,
   type SceneTimeComparisonRow,
+  type MergedPerformanceRow,
 } from "./utils/stats";
 import { scopeDashboardData } from "./utils/dataTransform";
+
+// --- Helper Functions for Chart Aggregation ---
+
+function aggregateByPeriod<T extends { date: Date; total: number }>(
+  dailyData: T[],
+  period: "week" | "month"
+): { date: Date; total: number }[] {
+  const groups = new Map<number, number>();
+
+  dailyData.forEach((item) => {
+    let keyDate: Date;
+    if (period === "week") {
+      keyDate = startOfWeek(item.date, { weekStartsOn: 1 });
+    } else {
+      keyDate = startOfMonth(item.date);
+    }
+    const key = keyDate.getTime();
+    groups.set(key, (groups.get(key) ?? 0) + item.total);
+  });
+
+  return Array.from(groups.entries())
+    .map(([time, total]) => ({ date: new Date(time), total }))
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+}
+
+function getPeakAnnotation(
+  data: { date: Date; total: number }[],
+  color: string = "#ffffff"
+): Layout["annotations"] {
+  if (data.length === 0) return [];
+
+  let maxVal = -Infinity;
+  let maxDate: Date | null = null;
+
+  data.forEach((d) => {
+    if (d.total > maxVal) {
+      maxVal = d.total;
+      maxDate = d.date;
+    }
+  });
+
+  if (!maxDate) return [];
+
+  return [
+    {
+      x: maxDate,
+      y: maxVal,
+      xref: "x",
+      yref: "y",
+      text: `Peak: ${maxVal.toLocaleString()}`,
+      showarrow: true,
+      arrowhead: 2,
+      ax: 0,
+      ay: -40,
+      font: { color, size: 12 },
+      bgcolor: "rgba(0,0,0,0.7)",
+      bordercolor: color,
+      borderwidth: 1,
+      borderpad: 4,
+    },
+  ];
+}
+
+function getAverageOverlays(
+  data: { total: number }[],
+  color: string = "#ff0000"
+): { shapes: Layout["shapes"]; annotations: Layout["annotations"] } {
+  if (data.length === 0) return { shapes: [], annotations: [] };
+
+  const totalSum = data.reduce((sum, item) => sum + item.total, 0);
+  const average = totalSum / data.length;
+  const roundedAvg = Math.round(average * 10) / 10; // Round to 1 decimal
+
+  return {
+    shapes: [
+      {
+        type: "line",
+        xref: "paper",
+        x0: 0,
+        x1: 1,
+        yref: "y",
+        y0: average,
+        y1: average,
+        line: {
+          color: color,
+          width: 2,
+          dash: "dash",
+        },
+      },
+    ],
+    annotations: [
+      {
+        xref: "paper",
+        x: 1,
+        y: average,
+        xanchor: "right",
+        yanchor: "bottom",
+        text: `Avg: ${roundedAvg}`,
+        showarrow: false,
+        font: {
+          color: color,
+          size: 10,
+        },
+        bgcolor: "rgba(255, 255, 255, 0.8)",
+        borderpad: 2,
+      },
+    ],
+  };
+}
 import { generateProjectReportPdf } from "./utils/projectReport";
-import type { DashboardData, Project } from "./types";
+import type { DashboardData, Project, LightConfig } from "./types";
 import {
   fetchProjects as fetchAirtableProjects,
   createProject as createAirtableProject,
@@ -74,6 +189,9 @@ import {
   fetchSceneOptions,
   fetchScenesWithMeta,
   fetchCoordinateSystemsWithMeta,
+  fetchScenesForLight,
+  fetchLights,
+  type LightOption,
   type SceneDetail,
   type CoordinateSystemDetail,
 } from "./services/ligApi";
@@ -134,7 +252,7 @@ const LoadingOverlay = () => (
 function App() {
   const dataState = useDashboardData();
   const [page, setPage] = useState<PageKey>("all");
-  const [selectedOwners, setSelectedOwners] = useState<string[]>([]);
+
   const [currentTime, setCurrentTime] = useState(new Date());
   const [dateRange, setDateRange] = useState<DateRange>(() => createDefaultRange());
   const [tempDateRange, setTempDateRange] = useState<DateRange>(() => createDefaultRange());
@@ -209,16 +327,99 @@ function App() {
     [readyData, selectedProjectId]
   );
 
+  // Lazy load AR objects for the selected project or all projects if on overview
+  useEffect(() => {
+    if (!dataState.loadArObjectsForLights) return;
+
+    if (page === "all" && readyData) {
+      const allLightIds = new Set<number>();
+      readyData.projects.forEach((p) => p.lightIds.forEach((id) => allLightIds.add(id)));
+      dataState.loadArObjectsForLights(Array.from(allLightIds));
+    } else if (selectedProject) {
+      dataState.loadArObjectsForLights(selectedProject.lightIds);
+    }
+  }, [selectedProject, page, readyData, dataState.loadArObjectsForLights]);
+
   const projectScopedData = useMemo(() => {
     if (!readyData || selectedProjectId === null) return null;
     return scopeDashboardData(readyData, new Set([selectedProjectId]));
   }, [readyData, selectedProjectId]);
 
-  const scopedData = useMemo(() => {
-    if (!readyData) return null;
-    const projectIds = createProjectScope(readyData.projects, selectedOwners);
-    return scopeDashboardData(readyData, projectIds);
-  }, [readyData, selectedOwners]);
+  const projectLightConfigs = useMemo(() => {
+    if (!readyData || !selectedProject) return [];
+
+    // Priority: Use stored Light Configs from Airtable if available
+    if (selectedProject.lightConfigs && selectedProject.lightConfigs.length > 0) {
+      return selectedProject.lightConfigs;
+    }
+
+    const projectLightIds = new Set(selectedProject.lightIds);
+
+    // Group by Light ID
+    const configMap = new Map<number, { lightId: string; coordinates: Set<string>; scenes: Set<string> }>();
+
+    // Initialize for all project lights
+    selectedProject.lightIds.forEach(id => {
+      configMap.set(id, { lightId: String(id), coordinates: new Set(), scenes: new Set() });
+    });
+
+    // Populate from DashboardData (readyData)
+    readyData.lights.forEach(light => {
+      if (!projectLightIds.has(light.ligId)) return;
+
+      const config = configMap.get(light.ligId)!;
+
+      if (light.coordinateSystemId) {
+        const cs = readyData.coordinateSystems.find(cs => cs.id === light.coordinateSystemId);
+        if (cs) {
+          config.coordinates.add(`${cs.id}-${cs.name}`);
+          if (cs.sceneId) {
+            config.scenes.add(`${cs.sceneId}-${cs.sceneName}`);
+          }
+        }
+      }
+    });
+
+    const configs = Array.from(configMap.values()).map(c => ({
+      lightId: c.lightId,
+      coordinates: Array.from(c.coordinates),
+      scenes: Array.from(c.scenes)
+    }));
+
+    // Fallback: Ensure all project scenes are assigned
+    // If we have scenes in the project that were not mapped via coordinate systems,
+    // assign them to the first light (or a specific logic if available).
+    // This matches the logic in startEdit where unmapped scenes are pushed to the first light.
+    if (configs.length > 0 && selectedProject.scenes.length > 0) {
+      const mappedScenes = new Set<string>();
+      configs.forEach(c => c.scenes.forEach(s => mappedScenes.add(s)));
+
+      const unmappedScenes = selectedProject.scenes.filter(s => !mappedScenes.has(s));
+      if (unmappedScenes.length > 0) {
+        // Add unmapped scenes to the first light config
+        configs[0].scenes.push(...unmappedScenes);
+      }
+    }
+
+    return configs;
+  }, [readyData, selectedProject]);
+
+  const projectMergedPerformance = useMemo(() => {
+    if (!projectScopedData) return [];
+    return computeMergedPerformanceStats(projectScopedData, projectLightConfigs, tempDateRange.start, tempDateRange.end);
+  }, [projectScopedData, projectLightConfigs, tempDateRange]);
+
+  const [scopedData, setScopedData] = useState<DashboardData | null>(null);
+
+  useEffect(() => {
+    if (!readyData) {
+      setScopedData(null);
+      return;
+    }
+    // Owner filter removed per user request
+    const projectIds = createProjectScope(readyData.projects, []);
+    setScopedData(scopeDashboardData(readyData, projectIds));
+  }, [readyData, dateRange]);
 
   const summary = useMemo(
     () => (scopedData ? computeScanSummary(scopedData) : null),
@@ -475,23 +676,6 @@ function App() {
     [projectScopedData, dateRange, dataMultiplier]
   );
 
-  const projectSceneComparison = useMemo(
-    () =>
-      projectScopedData
-        ? computeSceneComparisonStats(
-          projectScopedData,
-          dateRange.start,
-          dateRange.end
-        ).map((row) => ({
-          ...row,
-          scans: row.scans * dataMultiplier,
-          clicks: row.clicks * dataMultiplier,
-          newUsers: row.newUsers * dataMultiplier,
-          returningUsers: row.returningUsers * dataMultiplier,
-        }))
-        : [],
-    [projectScopedData, dateRange, dataMultiplier]
-  );
 
   const projectSceneTimeStats = useMemo(
     () =>
@@ -561,10 +745,18 @@ function App() {
     return buildProjectClickStats(scopedData);
   }, [scopedData]);
 
-  const sessionAnalytics = useMemo(
-    () => (scopedData ? buildClickSessionAnalytics(scopedData) : null),
-    [scopedData]
-  );
+  const sessionAnalytics = useMemo(() => {
+    if (!scopedData) return null;
+    const analytics = buildClickSessionAnalytics(scopedData);
+    if (dataMultiplier !== 1) {
+      analytics.insights.totalSessions = Math.round(analytics.insights.totalSessions * dataMultiplier);
+      analytics.insights.topEntryObjects.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
+      analytics.insights.topExitObjects.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
+      analytics.insights.topTransitions.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
+      analytics.insights.topPaths.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
+    }
+    return analytics;
+  }, [scopedData, dataMultiplier]);
   const sessionAnalyticsInRange = useMemo(() => {
     if (!scopedData) return null;
     const start = dateRange.start;
@@ -574,13 +766,37 @@ function App() {
     );
     // Create a shallow copy with filtered clicks
     const filteredData = { ...scopedData, clicks: filteredClicks };
-    return buildClickSessionAnalytics(filteredData);
-  }, [scopedData, dateRange]);
+    const analytics = buildClickSessionAnalytics(filteredData);
+    if (dataMultiplier !== 1) {
+      analytics.insights.totalSessions = Math.round(analytics.insights.totalSessions * dataMultiplier);
+      analytics.insights.topEntryObjects.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
+      analytics.insights.topExitObjects.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
+      analytics.insights.topTransitions.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
+      analytics.insights.topPaths.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
+    }
+    return analytics;
+  }, [scopedData, dateRange, dataMultiplier]);
 
-  const projectSessionAnalytics = useMemo(
-    () => (projectScopedData ? buildClickSessionAnalytics(projectScopedData) : null),
-    [projectScopedData]
-  );
+
+
+  const projectSessionAnalyticsInRange = useMemo(() => {
+    if (!projectScopedData) return null;
+    const start = dateRange.start;
+    const end = dateRange.end;
+    const filteredClicks = projectScopedData.clicks.filter(
+      (c) => c.time >= start && c.time <= end
+    );
+    const filteredData = { ...projectScopedData, clicks: filteredClicks };
+    const analytics = buildClickSessionAnalytics(filteredData);
+    if (dataMultiplier !== 1) {
+      analytics.insights.totalSessions = Math.round(analytics.insights.totalSessions * dataMultiplier);
+      analytics.insights.topEntryObjects.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
+      analytics.insights.topExitObjects.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
+      analytics.insights.topTransitions.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
+      analytics.insights.topPaths.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
+    }
+    return analytics;
+  }, [projectScopedData, dateRange, dataMultiplier]);
 
   const objectMarketingMetrics = useMemo(
     () =>
@@ -811,9 +1027,6 @@ function App() {
             dateRange={tempDateRange}
             setDateRange={setTempDateRange}
             onQuery={handleQuery}
-            ownerOptions={ownerOptions}
-            selectedOwners={selectedOwners}
-            onOwnersChange={setSelectedOwners}
             monthlyDumbbell={monthlyDumbbell}
             weeklyDumbbell={weeklyDumbbell}
             userAcquisitionDaily={userAcquisitionDaily}
@@ -865,8 +1078,8 @@ function App() {
             dataMultiplier={dataMultiplier}
             setDataMultiplier={setDataMultiplier}
             userSummary={projectUserSummary}
-            sessionAnalytics={projectSessionAnalytics}
-            sceneComparison={projectSceneComparison}
+            sessionAnalytics={projectSessionAnalyticsInRange}
+            projectMergedPerformance={projectMergedPerformance}
             sceneTimeStats={projectSceneTimeStats}
           />
         )}
@@ -879,7 +1092,7 @@ function App() {
           />
         )}
         {page === "settings" && (
-          <SettingsPage ownerOptions={ownerOptions} onNavigateHome={() => setPage("all")} />
+          <SettingsPage ownerOptions={ownerOptions} onNavigateHome={() => setPage("all")} onReloadData={dataState.reloadProjects} />
         )}
       </main>
     </div>
@@ -896,9 +1109,7 @@ interface AllProjectsPageProps {
   dateRange: DateRange;
   setDateRange: (range: DateRange) => void;
   onQuery: () => void;
-  ownerOptions: string[];
-  selectedOwners: string[];
-  onOwnersChange: (owners: string[]) => void;
+
   monthlyDumbbell: DumbbellSeries | null;
   weeklyDumbbell: DumbbellSeries | null;
   userAcquisitionDaily: UserAcquisitionPoint[];
@@ -939,9 +1150,7 @@ function AllProjectsPage({
   dateRange,
   setDateRange,
   onQuery,
-  ownerOptions,
-  selectedOwners,
-  onOwnersChange,
+
   monthlyDumbbell,
   weeklyDumbbell,
   userAcquisitionDaily,
@@ -1333,31 +1542,8 @@ function AllProjectsPage({
   return (
     <>
       <section>
-        <SectionTitle title="Account Filter" />
+        <SectionTitle title="Date Filter" />
         <div className="panel panel--surface panel--filters">
-          <div>
-            <label className="field-label">Owner Email</label>
-            <select
-              multiple
-              size={Math.min(ownerOptions.length, 6) || 3}
-              value={selectedOwners}
-              onChange={(event) => {
-                const values = Array.from(event.target.selectedOptions).map(
-                  (option) => option.value
-                );
-                onOwnersChange(values);
-              }}
-            >
-              {ownerOptions.map((owner) => (
-                <option key={owner} value={owner}>
-                  {owner}
-                </option>
-              ))}
-            </select>
-            <p className="field-hint">
-              按住 <kbd>⌘</kbd>/<kbd>Ctrl</kbd> 可選擇多個帳號；不選代表顯示全部專案。
-            </p>
-          </div>
           <div>
             <label className="field-label">Start Date</label>
             <input
@@ -1405,16 +1591,18 @@ function AllProjectsPage({
       </div>
 
       <section>
-        <SectionTitle title="Key Metrics" />
-        <div className="metric-grid">
-          <MetricCard title="Total Projects" value={summary.totalProjects} />
-          <MetricCard title="Active Projects" value={summary.activeProjects} />
-          <MetricCard title="Total Scans" value={summary.totalScans} />
-          <MetricCard title="Scans Today" value={summary.scansToday} />
-          <MetricCard title="Scans Yesterday" value={summary.scansYesterday} />
-          <MetricCard title="Unique Users" value={summary.uniqueUsers} />
+        <SectionTitle title="Project Funnels" />
+        <div className="panel panel--surface">
+          {projectFunnelRows.length === 0 ? (
+            <p>暫無符合條件的專案漏斗資料。</p>
+          ) : (
+            <ProjectFunnelTable rows={projectFunnelRows} />
+          )}
         </div>
       </section>
+
+
+
 
       <section>
         <SectionTitle title="Daily Scan Trend" />
@@ -1431,12 +1619,13 @@ function AllProjectsPage({
                 type: "date",
                 tickformat: "%Y-%m-%d",
               },
-              yaxis: { title: { text: "Volume" } },
+              yaxis: { title: { text: "Volume" }, showgrid: false },
               yaxis2: {
                 title: { text: "Cumulative Scans" },
                 overlaying: "y",
                 side: "right",
                 rangemode: "tozero",
+                showgrid: false,
               },
               paper_bgcolor: "transparent",
               plot_bgcolor: "transparent",
@@ -1494,12 +1683,13 @@ function AllProjectsPage({
                 type: "date",
                 tickformat: "%Y-%m-%d",
               },
-              yaxis: { title: { text: "Users" } },
+              yaxis: { title: { text: "Users" }, showgrid: false },
               yaxis2: {
                 title: { text: "Cumulative Users" },
                 overlaying: "y",
                 side: "right",
                 rangemode: "tozero",
+                showgrid: false,
               },
               paper_bgcolor: "transparent",
               plot_bgcolor: "transparent",
@@ -1571,6 +1761,7 @@ function AllProjectsPage({
                 margin: { l: 0, r: 0, t: 0, b: 0 },
                 paper_bgcolor: "transparent",
                 plot_bgcolor: "transparent",
+                uirevision: "true",
               }}
               style={{ width: "100%", height: "480px" }}
               useResizeHandler
@@ -1580,16 +1771,7 @@ function AllProjectsPage({
         </div>
       </section>
 
-      <section>
-        <SectionTitle title="Project Funnels" />
-        <div className="panel panel--surface">
-          {projectFunnelRows.length === 0 ? (
-            <p>暫無符合條件的專案漏斗資料。</p>
-          ) : (
-            <ProjectFunnelTable rows={projectFunnelRows} />
-          )}
-        </div>
-      </section>
+
 
       <section>
         <SectionTitle title="Activity & Scene Stats" />
@@ -1714,12 +1896,13 @@ function AllProjectsPage({
                 autosize: true,
                 margin: { l: 60, r: 80, t: 20, b: 50 },
                 xaxis: { title: { text: "Date" }, type: "date", tickformat: "%m-%d" },
-                yaxis: { title: { text: "Volume" }, rangemode: "tozero" },
+                yaxis: { title: { text: "Volume" }, rangemode: "tozero", showgrid: false },
                 yaxis2: {
                   title: { text: "Cumulative Scans" },
                   overlaying: "y",
                   side: "right",
                   rangemode: "tozero",
+                  showgrid: false,
                 },
                 paper_bgcolor: "transparent",
                 plot_bgcolor: "transparent",
@@ -1763,12 +1946,13 @@ function AllProjectsPage({
                 autosize: true,
                 margin: { l: 60, r: 80, t: 20, b: 50 },
                 xaxis: { title: { text: "Month" }, type: "date", tickformat: "%Y-%m" },
-                yaxis: { title: { text: "Volume" }, rangemode: "tozero" },
+                yaxis: { title: { text: "Volume" }, rangemode: "tozero", showgrid: false },
                 yaxis2: {
                   title: { text: "Cumulative Scans" },
                   overlaying: "y",
                   side: "right",
                   rangemode: "tozero",
+                  showgrid: false,
                 },
                 paper_bgcolor: "transparent",
                 plot_bgcolor: "transparent",
@@ -2225,8 +2409,8 @@ interface ProjectDetailPageProps {
   sessionAnalytics: ClickSessionAnalytics | null;
   dataMultiplier: number;
   setDataMultiplier: (value: number) => void;
-  sceneComparison: SceneComparisonRow[];
   sceneTimeStats: SceneTimeComparisonRow[];
+  projectMergedPerformance: MergedPerformanceRow[];
 }
 
 function ProjectDetailPage({
@@ -2245,7 +2429,9 @@ function ProjectDetailPage({
   totalUsersAllTime,
   dailySeries,
   dailyClickSeries,
+  scanVolumeDaily,
   scanVolumeMonthly,
+  userAcquisitionDaily,
   userAcquisitionRangeSeries,
   userAcquisitionMonthly,
   clickRanking,
@@ -2254,10 +2440,11 @@ function ProjectDetailPage({
   sessionAnalytics,
   dataMultiplier,
   setDataMultiplier,
-  sceneComparison,
   sceneTimeStats,
+  projectMergedPerformance,
 }: ProjectDetailPageProps) {
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [isCalculating, setIsCalculating] = useState(false);
   const [showMultiplierInput, setShowMultiplierInput] = useState(false);
   const [tempMultiplier, setTempMultiplier] = useState(dataMultiplier);
   const [projectSearchTerm, setProjectSearchTerm] = useState("");
@@ -2265,6 +2452,49 @@ function ProjectDetailPage({
     dateRange.end,
     "yyyy-MM-dd"
   )}`;
+
+  // Compute Weekly/Monthly Series
+  const weeklyScanSeries = useMemo(
+    () => aggregateByPeriod(dailySeries, "week"),
+    [dailySeries]
+  );
+  const monthlyScanSeries = useMemo(
+    () => aggregateByPeriod(dailySeries, "month"),
+    [dailySeries]
+  );
+
+  const weeklyClickSeries = useMemo(
+    () => aggregateByPeriod(dailyClickSeries, "week"),
+    [dailyClickSeries]
+  );
+  const monthlyClickSeries = useMemo(
+    () => aggregateByPeriod(dailyClickSeries, "month"),
+    [dailyClickSeries]
+  );
+
+  const weeklyUserSeries = useMemo(
+    () =>
+      aggregateByPeriod(
+        userAcquisitionRangeSeries.map((p) => ({
+          date: p.date,
+          total: p.newUsers,
+        })),
+        "week"
+      ),
+    [userAcquisitionRangeSeries]
+  );
+  const monthlyUserSeries = useMemo(
+    () =>
+      aggregateByPeriod(
+        userAcquisitionRangeSeries.map((p) => ({
+          date: p.date,
+          total: p.newUsers,
+        })),
+        "month"
+      ),
+    [userAcquisitionRangeSeries]
+  );
+
   const selectedProjectValue =
     selectedProjectId !== null ? String(selectedProjectId) : "";
   const projectName = project?.name ?? "未選擇專案";
@@ -2423,12 +2653,18 @@ function ProjectDetailPage({
             type="button"
             className="primary"
             onClick={() => {
-              setDataMultiplier(tempMultiplier);
-              setShowMultiplierInput(false);
+              setIsCalculating(true);
+              // Use setTimeout to allow the UI to render the loading state before the heavy calculation blocks the thread
+              setTimeout(() => {
+                setDataMultiplier(tempMultiplier);
+                setShowMultiplierInput(false);
+                setIsCalculating(false);
+              }, 100);
             }}
             style={{ marginTop: "auto" }}
+            disabled={isCalculating}
           >
-            Confirm
+            {isCalculating ? "Calculating..." : "Confirm"}
           </button>
         </div>
       )}
@@ -2619,7 +2855,10 @@ function ProjectDetailPage({
       {projectDetailsSection}
       {filterSection}
 
+      {/* --- Selected Period Analysis --- */}
       <section>
+        <SectionTitle title="Selected Period Analysis" />
+
         <div className="section-header">
           <SectionTitle title={`Project Overview — ${projectName}`} />
           <button
@@ -2631,27 +2870,19 @@ function ProjectDetailPage({
             {isGeneratingReport ? "產生中…" : "匯出 PDF 報告"}
           </button>
         </div>
+
+        {/* 1. Key Metrics (Range) */}
         <div className="metric-overview">
           <div className="metric-overview__group">
             <div className="metric-overview__title">Scans</div>
             <div className="metric-overview__grid">
               <MetricCard title={`Scans (${dateRangeLabel})`} value={scansInRange} />
-              <MetricCard title="Scans（全期間）" value={totalScansAllTime} />
-            </div>
-            <div className="metric-grid metric-grid--secondary">
-              <MetricCard title="Scans Today" value={scansToday} />
-              <MetricCard title="Scans Yesterday" value={scansYesterday} />
-              <MetricCard value={summary?.scansThisWeek ?? 0} title="Scans This Week" />
-              <MetricCard value={summary?.scansLastWeek ?? 0} title="Scans Last Week" />
-              <MetricCard value={summary?.scansThisMonth ?? 0} title="Scans This Month" />
-              <MetricCard value={summary?.scansLastMonth ?? 0} title="Scans Last Month" />
             </div>
           </div>
           <div className="metric-overview__group">
             <div className="metric-overview__title">Clicks</div>
             <div className="metric-overview__grid">
               <MetricCard title={`Clicks (${dateRangeLabel})`} value={clicksInRange} />
-              <MetricCard title="Clicks（全期間）" value={totalClicksAllTime} />
             </div>
           </div>
           <div className="metric-overview__group">
@@ -2661,7 +2892,6 @@ function ProjectDetailPage({
                 title={`Unique Users (${dateRangeLabel})`}
                 value={uniqueUsersInRange}
               />
-              <MetricCard title="Unique Users（全期間）" value={totalUsersAllTime} />
             </div>
             <div className="metric-grid metric-grid--secondary">
               <MetricCard title={`New Users (${dateRangeLabel})`} value={newUsersRange} />
@@ -2672,60 +2902,440 @@ function ProjectDetailPage({
             </div>
           </div>
         </div>
+
+        {/* 2. Trends Analysis (Range) */}
+        <div style={{ marginTop: "1.5rem", display: "flex", flexDirection: "column", gap: "2rem" }}>
+
+          {/* Scans */}
+          <div>
+            <h3 className="panel__title">Scan Trends ({dateRangeLabel})</h3>
+            <div className="chart-grid chart-grid--full-top">
+              <div className="panel panel--surface">
+                <h4>Daily</h4>
+                <Plot
+                  data={dailyHistogramData}
+                  layout={{
+                    autosize: true,
+                    margin: { l: 60, r: 60, t: 20, b: 50 },
+                    xaxis: { title: { text: "Date" }, type: "date", tickformat: "%Y-%m-%d" },
+                    yaxis: { title: { text: "Scans" }, rangemode: "tozero", showgrid: false },
+                    yaxis2: {
+                      title: { text: "Cumulative Scans" },
+                      overlaying: "y",
+                      side: "right",
+                      showgrid: false,
+                      rangemode: "tozero",
+                      automargin: true,
+                    },
+                    shapes: getAverageOverlays(dailySeries, "#ef4444").shapes,
+                    annotations: [
+                      ...(getPeakAnnotation(dailySeries) || []),
+                      ...(getAverageOverlays(dailySeries, "#ef4444").annotations || []),
+                    ],
+                    legend: { orientation: "h", x: 0.5, xanchor: "center", y: 1.1 },
+                    paper_bgcolor: "transparent",
+                    plot_bgcolor: "transparent",
+                  }}
+                  style={{ width: "100%", height: "360px" }}
+                  useResizeHandler
+                  config={{ displayModeBar: false }}
+                />
+              </div>
+              <div className="panel panel--surface">
+                <h4>Weekly</h4>
+                <Plot
+                  data={[{ type: "bar", x: weeklyScanSeries.map(d => d.date), y: weeklyScanSeries.map(d => d.total), marker: { color: "#3b82f6" } }]}
+                  layout={{
+                    autosize: true,
+                    margin: { l: 40, r: 40, t: 20, b: 40 },
+                    xaxis: { type: "date", tickformat: "%Y-%m-%d" },
+                    yaxis: { title: { text: "Scans" }, rangemode: "tozero" },
+                    shapes: getAverageOverlays(weeklyScanSeries, "#ef4444").shapes,
+                    annotations: [
+                      ...(getPeakAnnotation(weeklyScanSeries) || []),
+                      ...(getAverageOverlays(weeklyScanSeries, "#ef4444").annotations || []),
+                    ],
+                    paper_bgcolor: "transparent",
+                    plot_bgcolor: "transparent",
+                  }}
+                  style={{ width: "100%", height: "300px" }}
+                  useResizeHandler
+                  config={{ displayModeBar: false }}
+                />
+              </div>
+              <div className="panel panel--surface">
+                <h4>Monthly</h4>
+                <Plot
+                  data={[{ type: "bar", x: monthlyScanSeries.map(d => d.date), y: monthlyScanSeries.map(d => d.total), marker: { color: "#3b82f6" } }]}
+                  layout={{
+                    autosize: true,
+                    margin: { l: 40, r: 40, t: 20, b: 40 },
+                    xaxis: { type: "date", tickformat: "%Y-%m" },
+                    yaxis: { title: { text: "Scans" }, rangemode: "tozero" },
+                    shapes: getAverageOverlays(monthlyScanSeries, "#ef4444").shapes,
+                    annotations: [
+                      ...(getPeakAnnotation(monthlyScanSeries) || []),
+                      ...(getAverageOverlays(monthlyScanSeries, "#ef4444").annotations || []),
+                    ],
+                    paper_bgcolor: "transparent",
+                    plot_bgcolor: "transparent",
+                  }}
+                  style={{ width: "100%", height: "300px" }}
+                  useResizeHandler
+                  config={{ displayModeBar: false }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Clicks */}
+          <div>
+            <h3 className="panel__title">Click Trends ({dateRangeLabel})</h3>
+            <div className="chart-grid chart-grid--full-top">
+              <div className="panel panel--surface">
+                <h4>Daily</h4>
+                <Plot
+                  data={[{ type: "bar", x: dailyClickSeries.map(d => d.date), y: dailyClickSeries.map(d => d.total), marker: { color: "#f97316" } }]}
+                  layout={{
+                    autosize: true,
+                    margin: { l: 60, r: 40, t: 20, b: 50 },
+                    xaxis: { title: { text: "Date" }, type: "date", tickformat: "%Y-%m-%d" },
+                    yaxis: { title: { text: "Clicks" }, rangemode: "tozero" },
+                    shapes: getAverageOverlays(dailyClickSeries, "#ef4444").shapes,
+                    annotations: [
+                      ...(getPeakAnnotation(dailyClickSeries) || []),
+                      ...(getAverageOverlays(dailyClickSeries, "#ef4444").annotations || []),
+                    ],
+                    paper_bgcolor: "transparent",
+                    plot_bgcolor: "transparent",
+                  }}
+                  style={{ width: "100%", height: "360px" }}
+                  useResizeHandler
+                  config={{ displayModeBar: false }}
+                />
+              </div>
+              <div className="panel panel--surface">
+                <h4>Weekly</h4>
+                <Plot
+                  data={[{ type: "bar", x: weeklyClickSeries.map(d => d.date), y: weeklyClickSeries.map(d => d.total), marker: { color: "#f97316" } }]}
+                  layout={{
+                    autosize: true,
+                    margin: { l: 40, r: 40, t: 20, b: 40 },
+                    xaxis: { type: "date", tickformat: "%Y-%m-%d" },
+                    yaxis: { title: { text: "Clicks" }, rangemode: "tozero" },
+                    shapes: getAverageOverlays(weeklyClickSeries, "#ef4444").shapes,
+                    annotations: [
+                      ...(getPeakAnnotation(weeklyClickSeries) || []),
+                      ...(getAverageOverlays(weeklyClickSeries, "#ef4444").annotations || []),
+                    ],
+                    paper_bgcolor: "transparent",
+                    plot_bgcolor: "transparent",
+                  }}
+                  style={{ width: "100%", height: "300px" }}
+                  useResizeHandler
+                  config={{ displayModeBar: false }}
+                />
+              </div>
+              <div className="panel panel--surface">
+                <h4>Monthly</h4>
+                <Plot
+                  data={[{ type: "bar", x: monthlyClickSeries.map(d => d.date), y: monthlyClickSeries.map(d => d.total), marker: { color: "#f97316" } }]}
+                  layout={{
+                    autosize: true,
+                    margin: { l: 40, r: 40, t: 20, b: 40 },
+                    xaxis: { type: "date", tickformat: "%Y-%m" },
+                    yaxis: { title: { text: "Clicks" }, rangemode: "tozero" },
+                    shapes: getAverageOverlays(monthlyClickSeries, "#ef4444").shapes,
+                    annotations: [
+                      ...(getPeakAnnotation(monthlyClickSeries) || []),
+                      ...(getAverageOverlays(monthlyClickSeries, "#ef4444").annotations || []),
+                    ],
+                    paper_bgcolor: "transparent",
+                    plot_bgcolor: "transparent",
+                  }}
+                  style={{ width: "100%", height: "300px" }}
+                  useResizeHandler
+                  config={{ displayModeBar: false }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* User Acquisition */}
+          <div>
+            <h3 className="panel__title">User Acquisition Trends ({dateRangeLabel})</h3>
+            <div className="chart-grid chart-grid--full-top">
+              <div className="panel panel--surface">
+                <h4>Daily</h4>
+                {acquisitionRangeData ? (
+                  <Plot
+                    data={acquisitionRangeData.data}
+                    layout={{
+                      ...acquisitionRangeData.layout,
+                      shapes: getAverageOverlays(userAcquisitionRangeSeries.map(p => ({ date: p.date, total: p.newUsers })), "#ef4444").shapes,
+                      annotations: [
+                        ...(getPeakAnnotation(userAcquisitionRangeSeries.map(p => ({ date: p.date, total: p.newUsers }))) || []),
+                        ...(getAverageOverlays(userAcquisitionRangeSeries.map(p => ({ date: p.date, total: p.newUsers })), "#ef4444").annotations || []),
+                      ],
+                    }}
+                    style={{ width: "100%", height: "360px" }}
+                    config={{ displayModeBar: true }}
+                    useResizeHandler
+                  />
+                ) : (
+                  <p>沒有足夠的互動資料可用來繪製趨勢。</p>
+                )}
+              </div>
+              <div className="panel panel--surface">
+                <h4>Weekly (New Users)</h4>
+                <Plot
+                  data={[{ type: "bar", x: weeklyUserSeries.map(d => d.date), y: weeklyUserSeries.map(d => d.total), marker: { color: "#10b981" } }]}
+                  layout={{
+                    autosize: true,
+                    margin: { l: 40, r: 40, t: 20, b: 40 },
+                    xaxis: { type: "date", tickformat: "%Y-%m-%d" },
+                    yaxis: { title: { text: "New Users" }, rangemode: "tozero" },
+                    shapes: getAverageOverlays(weeklyUserSeries, "#ef4444").shapes,
+                    annotations: [
+                      ...(getPeakAnnotation(weeklyUserSeries) || []),
+                      ...(getAverageOverlays(weeklyUserSeries, "#ef4444").annotations || []),
+                    ],
+                    paper_bgcolor: "transparent",
+                    plot_bgcolor: "transparent",
+                  }}
+                  style={{ width: "100%", height: "300px" }}
+                  useResizeHandler
+                  config={{ displayModeBar: false }}
+                />
+              </div>
+              <div className="panel panel--surface">
+                <h4>Monthly (New Users)</h4>
+                <Plot
+                  data={[{ type: "bar", x: monthlyUserSeries.map(d => d.date), y: monthlyUserSeries.map(d => d.total), marker: { color: "#10b981" } }]}
+                  layout={{
+                    autosize: true,
+                    margin: { l: 40, r: 40, t: 20, b: 40 },
+                    xaxis: { type: "date", tickformat: "%Y-%m" },
+                    yaxis: { title: { text: "New Users" }, rangemode: "tozero" },
+                    shapes: getAverageOverlays(monthlyUserSeries, "#ef4444").shapes,
+                    annotations: [
+                      ...(getPeakAnnotation(monthlyUserSeries) || []),
+                      ...(getAverageOverlays(monthlyUserSeries, "#ef4444").annotations || []),
+                    ],
+                    paper_bgcolor: "transparent",
+                    plot_bgcolor: "transparent",
+                  }}
+                  style={{ width: "100%", height: "300px" }}
+                  useResizeHandler
+                  config={{ displayModeBar: false }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 3. Session Intelligence (Range) */}
+        <div style={{ marginTop: "1.5rem" }}>
+          <SessionIntelligenceSection sessionAnalytics={sessionAnalytics} />
+        </div>
+
+        {/* 4. Interactions & Scenes (Range) */}
+        <div className="chart-grid" style={{ marginTop: "1.5rem" }}>
+          <div className="panel panel--surface">
+            <h3 className="panel__title">Object Interaction Ranking ({dateRangeLabel})</h3>
+            {clickRanking.length === 0 ? (
+              <p>選定期間內沒有物件互動紀錄。</p>
+            ) : (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>AR Object</th>
+                      <th>Scene</th>
+                      <th>Clicks</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clickRanking.map((item) => (
+                      <tr key={item.objId}>
+                        <td>{item.name}</td>
+                        <td>{item.sceneName ?? "-"}</td>
+                        <td>{item.count.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <div className="panel panel--surface">
+            <h3 className="panel__title">Scene User Stats ({dateRangeLabel})</h3>
+            {sceneUserStats.length === 0 ? (
+              <p>選定期間內沒有可顯示的場景互動。</p>
+            ) : (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Scene</th>
+                      <th>新增用戶</th>
+                      <th>互動用戶</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sceneUserStats.slice(0, 30).map((row) => (
+                      <tr key={row.sceneId}>
+                        <td>{row.sceneName}</td>
+                        <td>{row.newUsers.toLocaleString()}</td>
+                        <td>{row.activeUsers.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                    {/* Total Row */}
+                    <tr className="table-row--total" style={{ fontWeight: "bold", backgroundColor: "var(--surface-hover)" }}>
+                      <td>Total</td>
+                      <td>
+                        {sceneUserStats.reduce((sum, r) => sum + r.newUsers, 0).toLocaleString()}
+                      </td>
+                      <td>
+                        {sceneUserStats.reduce((sum, r) => sum + r.activeUsers, 0).toLocaleString()}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                {sceneUserStats.length > 30 && (
+                  <p className="field-hint">
+                    僅顯示前 30 筆，可縮小日期或篩選帳號以查看更多資料。
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 5. Light & Scene Performance (Merged) */}
+        <section style={{ marginTop: "1.5rem" }}>
+          <div className="panel panel--surface">
+            <h3 className="panel__title">Light & Scene Performance ({dateRangeLabel})</h3>
+            {projectMergedPerformance.length === 0 ? (
+              <p>選定期間內沒有相關數據。</p>
+            ) : (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Light ID</th>
+                      <th>Coordinate System</th>
+                      <th>Scene Name</th>
+                      <th>Scans</th>
+                      <th>Clicks</th>
+                      <th>Intensity</th>
+                      <th>New Users</th>
+                      <th>Returning Users</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {projectMergedPerformance.map((row, idx) => (
+                      <tr key={`${row.lightId}-${idx}`}>
+                        <td>{row.lightId}</td>
+                        <td>{row.coordinateSystemNames.join(", ") || "-"}</td>
+                        <td>{row.sceneName}</td>
+                        <td>{row.scans.toLocaleString()}</td>
+                        <td>{row.clicks.toLocaleString()}</td>
+                        <td>{formatPercent(row.intensity)}</td>
+                        <td>{row.newUsers.toLocaleString()}</td>
+                        <td>{row.returningUsers.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                    {/* Total Row */}
+                    <tr className="table-row--total" style={{ fontWeight: "bold", backgroundColor: "var(--surface-hover)" }}>
+                      <td>Total</td>
+                      <td>-</td>
+                      <td>-</td>
+                      <td>
+                        {(() => {
+                          const uniqueLightScans = new Map<number, number>();
+                          projectMergedPerformance.forEach(r => uniqueLightScans.set(r.lightId, r.scans));
+                          return Array.from(uniqueLightScans.values()).reduce((a, b) => a + b, 0).toLocaleString();
+                        })()}
+                      </td>
+                      <td>
+                        {projectMergedPerformance.reduce((sum, r) => sum + r.clicks, 0).toLocaleString()}
+                      </td>
+                      <td>
+                        {(() => {
+                          // Total Intensity = Total Clicks / Total Unique Scans
+                          const uniqueLightScans = new Map<number, number>();
+                          projectMergedPerformance.forEach(r => uniqueLightScans.set(r.lightId, r.scans));
+                          const totalScans = Array.from(uniqueLightScans.values()).reduce((a, b) => a + b, 0);
+                          const totalClicks = projectMergedPerformance.reduce((sum, r) => sum + r.clicks, 0);
+                          return totalScans > 0 ? formatPercent(totalClicks / totalScans) : "0%";
+                        })()}
+                      </td>
+                      <td>
+                        {projectMergedPerformance.reduce((sum, r) => sum + r.newUsers, 0).toLocaleString()}
+                      </td>
+                      <td>
+                        {projectMergedPerformance.reduce((sum, r) => sum + r.returningUsers, 0).toLocaleString()}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
       </section>
 
-      <section>
-        <SectionTitle title="Scan Analytics" />
-        <div className="panel panel--surface" style={{ marginBottom: "1rem" }}>
-          <h3 className="panel__title">Daily Scan Trend ({dateRangeLabel})</h3>
-          <Plot
-            data={dailyHistogramData}
-            layout={{
-              autosize: true,
-              margin: { l: 60, r: 20, t: 20, b: 50 },
-              xaxis: {
-                title: { text: "Date" },
-                type: "date",
-                tickformat: "%Y-%m-%d",
-              },
-              yaxis: { title: { text: "Scans" }, rangemode: "tozero" },
-              yaxis2: {
-                title: { text: "Cumulative Scans" },
-                overlaying: "y",
-                side: "right",
-                showgrid: false,
-                rangemode: "tozero",
-              },
-              legend: { orientation: "h", x: 0.5, xanchor: "center", y: 1.1 },
-              paper_bgcolor: "transparent",
-              plot_bgcolor: "transparent",
-            }}
-            style={{ width: "100%", height: "360px" }}
-            useResizeHandler
-            config={{ displayModeBar: false }}
-          />
+      {/* --- Long-term Trends & Benchmarks --- */}
+      <section style={{ marginTop: "3rem" }}>
+        <SectionTitle title="Long-term Trends & Benchmarks" />
+
+        {/* 1. Key Metrics (Fixed/All-time) */}
+        <div className="metric-overview">
+          <div className="metric-overview__group">
+            <div className="metric-overview__title">Scans (Benchmarks)</div>
+            <div className="metric-grid metric-grid--secondary">
+              <MetricCard title="Scans Today" value={scansToday} />
+              <MetricCard title="Scans Yesterday" value={scansYesterday} />
+              <MetricCard title="Scans This Week" value={summary?.scansThisWeek ?? 0} />
+              <MetricCard title="Scans Last Week" value={summary?.scansLastWeek ?? 0} />
+              <MetricCard title="Scans This Month" value={summary?.scansThisMonth ?? 0} />
+              <MetricCard title="Scans Last Month" value={summary?.scansLastMonth ?? 0} />
+              <MetricCard title="Total Scans (All-time)" value={totalScansAllTime} />
+            </div>
+          </div>
+          <div className="metric-overview__group">
+            <div className="metric-overview__title">Clicks & Users (All-time)</div>
+            <div className="metric-overview__grid">
+              <MetricCard title="Total Clicks" value={totalClicksAllTime} />
+              <MetricCard title="Total Unique Users" value={totalUsersAllTime} />
+            </div>
+          </div>
         </div>
-        <div className="chart-grid">
+
+        {/* 2. Monthly Trends */}
+        <div className="chart-grid" style={{ marginTop: "1.5rem" }}>
           <div className="panel panel--surface">
-            <h3 className="panel__title">近 12 個月（月）</h3>
+            <h3 className="panel__title">Monthly Scan Volume (Last 12 Months)</h3>
             {scanVolumeMonthly.length > 0 ? (
               <Plot
                 data={scanVolumeMonthlyData}
                 layout={{
                   autosize: true,
-                  margin: { l: 60, r: 20, t: 20, b: 50 },
+                  margin: { l: 60, r: 60, t: 20, b: 50 },
                   xaxis: {
                     title: { text: "Month" },
                     type: "date",
                     tickformat: "%Y-%m",
                   },
-                  yaxis: { title: { text: "Scans" }, rangemode: "tozero" },
+                  yaxis: { title: { text: "Scans" }, rangemode: "tozero", showgrid: false },
                   yaxis2: {
                     title: { text: "Cumulative" },
                     overlaying: "y",
                     side: "right",
                     showgrid: false,
                     rangemode: "tozero",
+                    automargin: true,
                   },
                   legend: { orientation: "h", x: 0.5, xanchor: "center", y: 1.1 },
                   paper_bgcolor: "transparent",
@@ -2739,36 +3349,13 @@ function ProjectDetailPage({
               <p>沒有足夠的掃描資料。</p>
             )}
           </div>
-
-        </div>
-      </section>
-
-      <section>
-        <SectionTitle title="User Acquisition" />
-        <div className="panel panel--surface" style={{ marginBottom: "1rem" }}>
-          <h3 className="panel__title">
-            Daily User Acquisition Trend ({dateRangeLabel})
-          </h3>
-          {acquisitionRangeData ? (
-            <Plot
-              data={acquisitionRangeData.data}
-              layout={acquisitionRangeData.layout}
-              style={{ width: "100%", height: "420px" }}
-              config={{ displayModeBar: true }}
-              useResizeHandler
-            />
-          ) : (
-            <p>沒有足夠的互動資料可用來繪製趨勢。</p>
-          )}
-        </div>
-        <div className="chart-grid">
           <div className="panel panel--surface">
-            <h3 className="panel__title">全期間（月）</h3>
+            <h3 className="panel__title">Monthly User Acquisition (All-time)</h3>
             {acquisitionMonthlyData ? (
               <Plot
                 data={acquisitionMonthlyData.data}
                 layout={acquisitionMonthlyData.layout}
-                style={{ width: "100%", height: "420px" }}
+                style={{ width: "100%", height: "360px" }}
                 config={{ displayModeBar: true }}
                 useResizeHandler
               />
@@ -2777,136 +3364,9 @@ function ProjectDetailPage({
             )}
           </div>
         </div>
-      </section>
 
-      <SessionIntelligenceSection sessionAnalytics={sessionAnalytics} />
-
-      <section>
-        <SectionTitle title="Interactions & Scenes" />
-        <div className="panel panel--surface">
-          <h3 className="panel__title">Object Interaction Ranking ({dateRangeLabel})</h3>
-          {clickRanking.length === 0 ? (
-            <p>選定期間內沒有物件互動紀錄。</p>
-          ) : (
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>AR Object</th>
-                    <th>Scene</th>
-                    <th>Clicks</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {clickRanking.map((item) => (
-                    <tr key={item.objId}>
-                      <td>{item.name}</td>
-                      <td>{item.sceneName ?? "-"}</td>
-                      <td>{item.count.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-        <div className="panel panel--surface">
-          <h3 className="panel__title">Scene User Stats ({dateRangeLabel})</h3>
-          {sceneUserStats.length === 0 ? (
-            <p>選定期間內沒有可顯示的場景互動。</p>
-          ) : (
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Scene</th>
-                    <th>新增用戶</th>
-                    <th>互動用戶</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sceneUserStats.slice(0, 30).map((row) => (
-                    <tr key={row.sceneId}>
-                      <td>{row.sceneName}</td>
-                      <td>{row.newUsers.toLocaleString()}</td>
-                      <td>{row.activeUsers.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {sceneUserStats.length > 30 && (
-                <p className="field-hint">
-                  僅顯示前 30 筆，可縮小日期或篩選帳號以查看更多資料。
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section>
-        <SectionTitle title="Scene Analysis" />
-
-        {/* Table 1: Scene Performance */}
-        <div className="panel panel--surface" style={{ marginBottom: "1rem" }}>
-          <h3 className="panel__title">Scene Performance ({dateRangeLabel})</h3>
-          {sceneComparison.length === 0 ? (
-            <p>選定期間內沒有場景數據。</p>
-          ) : (
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Scene Name</th>
-                    <th>Scans</th>
-                    <th>Clicks</th>
-                    <th>Interaction Rate</th>
-                    <th>New Users</th>
-                    <th>Returning Users</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sceneComparison.map((row) => (
-                    <tr key={row.sceneId}>
-                      <td>{row.sceneName}</td>
-                      <td>{row.scans.toLocaleString()}</td>
-                      <td>{row.clicks.toLocaleString()}</td>
-                      <td>{formatPercent(row.interactionRate)}</td>
-                      <td>{row.newUsers.toLocaleString()}</td>
-                      <td>{row.returningUsers.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                  {/* Total Row */}
-                  <tr className="table-row--total" style={{ fontWeight: "bold", backgroundColor: "var(--surface-hover)" }}>
-                    <td>Total</td>
-                    <td>
-                      {sceneComparison.reduce((sum, r) => sum + r.scans, 0).toLocaleString()}
-                    </td>
-                    <td>
-                      {sceneComparison.reduce((sum, r) => sum + r.clicks, 0).toLocaleString()}
-                    </td>
-                    <td>
-                      {(() => {
-                        const totalScans = sceneComparison.reduce((sum, r) => sum + r.scans, 0);
-                        const totalClicks = sceneComparison.reduce((sum, r) => sum + r.clicks, 0);
-                        return totalScans > 0 ? formatPercent(totalClicks / totalScans) : "0%";
-                      })()}
-                    </td>
-                    <td>
-                      {sceneComparison.reduce((sum, r) => sum + r.newUsers, 0).toLocaleString()}
-                    </td>
-                    <td>
-                      {sceneComparison.reduce((sum, r) => sum + r.returningUsers, 0).toLocaleString()}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {/* Table 2: Scene Time Comparison */}
-        <div className="panel panel--surface">
+        {/* 3. Scene Time Comparison */}
+        <div className="panel panel--surface" style={{ marginTop: "1.5rem" }}>
           <h3 className="panel__title">Scene Trends (Time Comparison)</h3>
           {sceneTimeStats.length === 0 ? (
             <p>沒有場景趨勢數據。</p>
@@ -3507,6 +3967,7 @@ interface ProjectFormState {
   isActive: boolean;
   latLon: string;
   ownerEmails: string[];
+  lightConfigs: string;
 }
 
 const initialProjectForm: ProjectFormState = {
@@ -3520,12 +3981,15 @@ const initialProjectForm: ProjectFormState = {
   isActive: false,
   latLon: "",
   ownerEmails: [],
+  lightConfigs: "",
 };
 
 interface SelectOption {
   value: string;
   label: string;
 }
+
+
 
 const SETTINGS_PAGE_SIZE = 10;
 
@@ -3546,9 +4010,11 @@ function sortAirtableProjects(items: AirtableProject[]): AirtableProject[] {
 function SettingsPage({
   ownerOptions,
   onNavigateHome,
+  onReloadData,
 }: {
   ownerOptions: string[];
   onNavigateHome: () => void;
+  onReloadData?: () => Promise<void>;
 }) {
   const [projects, setProjects] = useState<AirtableProject[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(false);
@@ -3567,15 +4033,159 @@ function SettingsPage({
   const [loggingIn, setLoggingIn] = useState(false);
   const [ligError, setLigError] = useState<string | null>(null);
 
-  const [lightOptions, setLightOptions] = useState<SelectOption[]>([]);
+  const [lightConfigs, setLightConfigs] = useState<LightConfig[]>([]);
+  const [newLightIdInput, setNewLightIdInput] = useState("");
+  const [sceneInputs, setSceneInputs] = useState<Record<string, string>>({});
+  const [coordinateInputs, setCoordinateInputs] = useState<Record<string, string>>({});
+  const [syncErrorMessage, setSyncErrorMessage] = useState<string | null>(null);
+  const [isSyncingData, setIsSyncingData] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
+  // Sync lightConfigs to formState whenever it changes
+  useEffect(() => {
+    const allLightIds = lightConfigs.map(c => c.lightId);
+    const allCoordinates = Array.from(new Set(lightConfigs.flatMap(c => c.coordinates)));
+    const allScenes = Array.from(new Set(lightConfigs.flatMap(c => c.scenes)));
+
+    setFormState(prev => ({
+      ...prev,
+      lightIds: allLightIds,
+      coordinates: allCoordinates,
+      scenes: allScenes,
+      // Use the first light's lat/lon as the project default if available
+      latLon: lightConfigs.length > 0 && lightConfigs[0].latitude && lightConfigs[0].longitude
+        ? `${lightConfigs[0].latitude}, ${lightConfigs[0].longitude}`
+        : prev.latLon
+    }));
+  }, [lightConfigs]);
+
+  async function addLightConfig() {
+    const id = newLightIdInput.trim();
+    if (!id) return;
+    if (lightConfigs.some(c => c.lightId === id)) return;
+
+    const newConfig: LightConfig = { lightId: id, coordinates: [], scenes: [] };
+    setLightConfigs(prev => [...prev, newConfig]);
+    setNewLightIdInput("");
+
+    // Auto-fetch coordinates and scenes
+    try {
+      console.log(`Fetching coordinates and scenes for LightID: ${id}`);
+      const [coords, scenes, allLights] = await Promise.all([
+        fetchCoordinatesForLight(id, ligToken || undefined),
+        fetchScenesForLight(id, ligToken || undefined),
+        fetchLights(ligToken || undefined)
+      ]);
+
+      console.log(`Fetched coordinates for ${id}:`, coords);
+      console.log(`Fetched scenes for ${id}:`, scenes);
+
+      // Find lat/lon from all lights
+      const lightDetail = allLights.find(l => l.id === id);
+      const lat = lightDetail?.latitude != null ? lightDetail.latitude : undefined;
+      const lon = lightDetail?.longitude != null ? lightDetail.longitude : undefined;
+
+      const coordIds = coords.map(c => c.id);
+
+      // Auto-populate scenes from fetched scenes
+      const newScenes = scenes.map(s => {
+        let name = s.name;
+        if (!name) {
+          // Try to find name in existing options or pages
+          const found = sceneOptions.find(opt => opt.value.startsWith(`${s.id}-`)) ||
+            scenePages.find(page => page.id === s.id);
+          if (found) {
+            // If found in options, value is "ID-Name", extract Name
+            if ('value' in found) {
+              const parts = found.value.split('-');
+              if (parts.length > 1) name = parts.slice(1).join('-');
+            } else {
+              name = found.name;
+            }
+          }
+        }
+        return name ? `${s.id}-${name}` : s.id; // Fallback to just ID if name still missing
+      });
+
+      // Update coordinate options so they are available in the dropdown
+      setCoordinateOptions(prev => {
+        const newOptions = coords.map(c => ({ value: c.id, label: `${c.id}-${c.name}` }));
+        return mergeOptions(prev, newOptions);
+      });
+
+      // Update scene options so they are available in the dropdown
+      setSceneOptions(prev => {
+        const newOptions = scenes.map(s => {
+          const val = `${s.id}-${s.name}`;
+          return { value: val, label: val };
+        });
+        return mergeOptions(prev, newOptions);
+      });
+
+      setLightConfigs(prev => prev.map(c => {
+        if (c.lightId === id) {
+          console.log(`Updating config for ${id} with coordinates:`, coordIds);
+          console.log(`Updating config for ${id} with scenes:`, newScenes);
+          // Merge with existing scenes to avoid overwriting if user added some manually before fetch completed (unlikely but safe)
+          const uniqueScenes = Array.from(new Set([...c.scenes, ...newScenes]));
+          return {
+            ...c,
+            coordinates: coordIds,
+            scenes: uniqueScenes,
+            latitude: lat,
+            longitude: lon
+          };
+        }
+        return c;
+      }));
+    } catch (e) {
+      console.error("Error fetching coordinates/scenes:", e);
+    }
+  }
+
+  function updateLightConfig(id: string, updates: Partial<LightConfig>) {
+    setLightConfigs(prev => prev.map(c => {
+      if (c.lightId === id) {
+        return { ...c, ...updates };
+      }
+      return c;
+    }));
+  }
+
+  function removeLightConfig(id: string) {
+    setLightConfigs(prev => prev.filter(c => c.lightId !== id));
+  }
+
+  const handleLatLonPaste = (
+    e: React.ClipboardEvent<HTMLInputElement>,
+    lightId: string,
+    field: 'latitude' | 'longitude'
+  ) => {
+    const text = e.clipboardData.getData('text');
+    if (!text) return;
+
+    // Check for "lat, lon" format (e.g., "22.8908, 120.6230")
+    const parts = text.split(',').map(p => p.trim());
+    if (parts.length === 2) {
+      const lat = parseFloat(parts[0]);
+      const lon = parseFloat(parts[1]);
+
+      if (!isNaN(lat) && !isNaN(lon)) {
+        e.preventDefault();
+        updateLightConfig(lightId, { latitude: lat, longitude: lon });
+      }
+    }
+  };
+
   const [sceneOptions, setSceneOptions] = useState<SelectOption[]>([]);
   const [coordinateOptions, setCoordinateOptions] = useState<SelectOption[]>([]);
+  const [lightOptions, setLightOptions] = useState<LightOption[]>([]);
   const [loadingLightOptions, setLoadingLightOptions] = useState(false);
   const [loadingSceneOptions, setLoadingSceneOptions] = useState(false);
-  const [loadingCoordinateOptions, setLoadingCoordinateOptions] = useState(false);
+
   const [ownerEmailInput, setOwnerEmailInput] = useState("");
-  const [lightSearchInput, setLightSearchInput] = useState("");
-  const [sceneSearchInput, setSceneSearchInput] = useState("");
+  // Removed lightSearchInput, sceneSearchInput
+
   const [customOwnerEmails, setCustomOwnerEmails] = useState<string[]>([]);
   const [scenePages, setScenePages] = useState<SceneDetail[]>([]);
   const [coordinatePages, setCoordinatePages] = useState<CoordinateSystemDetail[]>([]);
@@ -3583,9 +4193,9 @@ function SettingsPage({
   const [coordinatePageIndex, setCoordinatePageIndex] = useState(0);
   const [loadingScenes, setLoadingScenes] = useState(false);
   const [loadingCoordinates, setLoadingCoordinates] = useState(false);
-  const [isSyncingData, setIsSyncingData] = useState(false);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
-  const [syncErrorMessage, setSyncErrorMessage] = useState<string | null>(null);
+
+
+
   const sortedProjects = useMemo(() => sortAirtableProjects(projects), [projects]);
   const selectedProject = useMemo(
     () => sortedProjects.find((project) => project.id === selectedProjectId) ?? null,
@@ -3663,28 +4273,10 @@ function SettingsPage({
     return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
   }, [ownerOptions, customOwnerEmails, formState.ownerEmails]);
 
-  const selectedLightItems = useMemo(() => {
-    const map = new Map(lightOptions.map((option) => [option.value, option.label]));
-    return formState.lightIds.map((lightId) => ({
-      value: lightId,
-      label: map.get(lightId) ?? lightId,
-    }));
-  }, [formState.lightIds, lightOptions]);
-
-  const selectedSceneItems = useMemo(() => {
-    const map = new Map(sceneOptions.map((option) => [option.value, option.label]));
-    return formState.scenes.map((sceneId) => ({
-      value: sceneId,
-      label: map.get(sceneId) ?? sceneId,
-    }));
-  }, [formState.scenes, sceneOptions]);
-
   const airtableConfigured =
     Boolean(import.meta.env.VITE_AIRTABLE_PAT) &&
     Boolean(import.meta.env.VITE_AIRTABLE_BASE_ID) &&
     Boolean(import.meta.env.VITE_AIRTABLE_EVENTS_TABLE);
-  const lightDatalistId = "settings-light-options";
-  const sceneDatalistId = "settings-scene-options";
 
   useEffect(() => {
     if (!airtableConfigured) return;
@@ -3701,56 +4293,7 @@ function SettingsPage({
     void loadReferenceData(ligToken);
   }, [ligToken]);
 
-  useEffect(() => {
-    let cancelled = false;
 
-    async function loadCoordinates() {
-      if (formState.lightIds.length === 0) {
-        setCoordinateOptions((prev) =>
-          mergeOptions(prev, formState.coordinates.map((value) => ({ value, label: value })))
-        );
-        return;
-      }
-
-      setLoadingCoordinateOptions(true);
-      try {
-        const aggregated = new Map<string, SelectOption>();
-        for (const lightId of formState.lightIds) {
-          const list = await fetchCoordinatesForLight(lightId, ligToken || undefined);
-          list.forEach((coord) => {
-            const value = `${coord.id}-${coord.name}`;
-            aggregated.set(value, { value, label: value });
-          });
-        }
-        formState.coordinates.forEach((value) => {
-          if (!aggregated.has(value)) aggregated.set(value, { value, label: value });
-        });
-        if (!cancelled) {
-          setCoordinateOptions(Array.from(aggregated.values()));
-          const allowed = new Set(aggregated.keys());
-          setFormState((prev) => {
-            const filtered = prev.coordinates.filter((value) => allowed.has(value));
-            if (filtered.length === prev.coordinates.length) return prev;
-            return { ...prev, coordinates: filtered };
-          });
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setLigError(error instanceof Error ? error.message : String(error));
-          setCoordinateOptions((prev) =>
-            mergeOptions(prev, formState.coordinates.map((value) => ({ value, label: value })))
-          );
-        }
-      } finally {
-        if (!cancelled) setLoadingCoordinateOptions(false);
-      }
-    }
-
-    void loadCoordinates();
-    return () => {
-      cancelled = true;
-    };
-  }, [ligToken, formState.lightIds.join(","), formState.coordinates.join("|")]);
 
   async function loadProjects(): Promise<AirtableProject[] | undefined> {
     try {
@@ -3770,7 +4313,18 @@ function SettingsPage({
     }
   }
 
+  // Auto-update Project ID when projects are loaded
+  useEffect(() => {
+    if (sortedProjects.length > 0 && !formState.id) {
+      const nextId = computeNextProjectId(sortedProjects);
+      if (nextId !== formState.projectId) {
+        setFormState(prev => ({ ...prev, projectId: nextId }));
+      }
+    }
+  }, [sortedProjects, formState.id, formState.projectId]);
+
   async function loadReferenceData(token: string) {
+    console.log("loadReferenceData started", { token: !!token });
     setLigError(null);
     setLoadingLightOptions(true);
     setLoadingSceneOptions(true);
@@ -3783,19 +4337,23 @@ function SettingsPage({
       setScenePageIndex(0);
       setCoordinatePageIndex(0);
     }
+
     try {
+      console.log("Fetching reference data...");
       const [lights, scenes, scenesMeta, coordinateMeta] = await Promise.all([
-        fetchLightOptions(token || undefined),
+        fetchLightOptions(token),
         fetchSceneOptions(token || undefined),
         token ? fetchScenesWithMeta(token) : Promise.resolve([]),
         token ? fetchCoordinateSystemsWithMeta(token) : Promise.resolve([]),
       ]);
-      setLightOptions((prev) =>
-        mergeOptions(
-          prev,
-          lights.map((item) => ({ value: item.id, label: item.label }))
-        )
-      );
+      console.log("Reference data fetched", {
+        lights: lights.length,
+        scenes: scenes.length,
+        scenesMeta: scenesMeta.length,
+        coordinateMeta: coordinateMeta.length
+      });
+
+      setLightOptions(lights);
       setSceneOptions((prev) =>
         mergeOptions(
           prev,
@@ -3805,23 +4363,25 @@ function SettingsPage({
           })
         )
       );
+      setCoordinateOptions((prev) =>
+        mergeOptions(
+          prev,
+          coordinateMeta.map((item) => {
+            const value = String(item.id);
+            return { value, label: `${item.id}-${item.name}` };
+          })
+        )
+      );
+
       if (token) {
         const sortedScenes = sortByDescendingId(scenesMeta);
         const sortedCoords = sortByDescendingId(coordinateMeta);
         setScenePages(sortedScenes);
         setCoordinatePages(sortedCoords);
-        setScenePageIndex(0);
-        setCoordinatePageIndex(0);
-      } else {
-        setScenePages([]);
-        setCoordinatePages([]);
       }
+      console.log("Reference data state updated");
     } catch (error) {
-      setLigError(error instanceof Error ? error.message : String(error));
-      setScenePages([]);
-      setCoordinatePages([]);
-      setScenePageIndex(0);
-      setCoordinatePageIndex(0);
+      console.error("loadReferenceData error", error);
     } finally {
       setLoadingLightOptions(false);
       setLoadingSceneOptions(false);
@@ -3846,56 +4406,7 @@ function SettingsPage({
       projectId: nextProjectId ?? computeNextProjectId(sortedProjects),
     });
     setOwnerEmailInput("");
-  }
-
-  function addLightValue(rawValue?: string) {
-    const input = (rawValue ?? lightSearchInput).trim();
-    if (!input) return;
-    const match = lightOptions.find(
-      (option) =>
-        option.value.toLowerCase() === input.toLowerCase() ||
-        option.label.toLowerCase() === input.toLowerCase()
-    );
-    const value = match?.value ?? input;
-    const label = match?.label ?? input;
-    setFormState((prev) => {
-      if (prev.lightIds.includes(value)) return prev;
-      return { ...prev, lightIds: [...prev.lightIds, value] };
-    });
-    setLightOptions((prev) => mergeOptions(prev, [{ value, label }]));
-    setLightSearchInput("");
-  }
-
-  function removeLightValue(value: string) {
-    setFormState((prev) => ({
-      ...prev,
-      lightIds: prev.lightIds.filter((item) => item !== value),
-    }));
-  }
-
-  function addSceneValue(rawValue?: string) {
-    const input = (rawValue ?? sceneSearchInput).trim();
-    if (!input) return;
-    const match = sceneOptions.find(
-      (option) =>
-        option.value.toLowerCase() === input.toLowerCase() ||
-        option.label.toLowerCase() === input.toLowerCase()
-    );
-    const value = match?.value ?? input;
-    const label = match?.label ?? input;
-    setFormState((prev) => {
-      if (prev.scenes.includes(value)) return prev;
-      return { ...prev, scenes: [...prev.scenes, value] };
-    });
-    setSceneOptions((prev) => mergeOptions(prev, [{ value, label }]));
-    setSceneSearchInput("");
-  }
-
-  function removeSceneValue(value: string) {
-    setFormState((prev) => ({
-      ...prev,
-      scenes: prev.scenes.filter((item) => item !== value),
-    }));
+    setLightConfigs([]);
   }
 
   function handleInputChange(
@@ -3949,6 +4460,7 @@ function SettingsPage({
         isActive: formState.isActive,
         latLon: formState.latLon.trim() || null,
         ownerEmails: formState.ownerEmails.map((value) => value.trim()).filter(Boolean),
+        lightConfigs: JSON.stringify(lightConfigs),
       };
 
       if (formState.id) {
@@ -3956,6 +4468,13 @@ function SettingsPage({
       } else {
         await createAirtableProject(payload);
       }
+
+      // Reload global context data to update dashboard immediately
+      // Reload global context data to update dashboard immediately
+      if (onReloadData) {
+        await onReloadData();
+      }
+
       const updatedList = await loadProjects();
       resetForm(computeNextProjectId(updatedList ?? sortedProjects));
     } catch (error) {
@@ -3997,7 +4516,7 @@ function SettingsPage({
     return String(currentMax + 1);
   }
 
-  function startEdit(record: AirtableProject) {
+  async function startEdit(record: AirtableProject) {
     setSelectedProjectId(record.id);
     setFormState({
       id: record.id,
@@ -4011,6 +4530,7 @@ function SettingsPage({
       isActive: record.isActive,
       latLon: record.latLon ?? "",
       ownerEmails: record.ownerEmails,
+      lightConfigs: record.lightConfigs ?? "",
     });
 
     setCustomOwnerEmails((prev) => {
@@ -4021,9 +4541,101 @@ function SettingsPage({
       return Array.from(set);
     });
 
-    setLightOptions((prev) =>
-      mergeOptions(prev, record.lightIds.map((value) => ({ value, label: value })))
-    );
+    // Reconstruct Light Configs
+    let configs: LightConfig[] = [];
+
+    // Try to parse stored lightConfigs first
+    if (record.lightConfigs) {
+      try {
+        const parsed = JSON.parse(record.lightConfigs);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          configs = parsed;
+        }
+      } catch (e) {
+        console.warn("Failed to parse stored lightConfigs in startEdit", e);
+      }
+    }
+
+    // Only reconstruct if no valid stored configs found
+    if (configs.length === 0) {
+      const projectCoords = new Set(record.coordinates);
+      const usedScenes = new Set<string>();
+
+      // Fetch all lights once to get lat/lon details
+      let allLightsMap = new Map<string, { lat?: number; lon?: number }>();
+      try {
+        const lights = await fetchLights(ligToken || undefined);
+        lights.forEach(l => {
+          allLightsMap.set(l.id, {
+            lat: l.latitude != null ? l.latitude : undefined,
+            lon: l.longitude != null ? l.longitude : undefined
+          });
+        });
+      } catch (e) {
+        console.error("Failed to fetch lights for startEdit", e);
+      }
+
+      for (const lightId of record.lightIds) {
+        const lightDetail = allLightsMap.get(lightId);
+        const config: LightConfig = {
+          lightId,
+          coordinates: [],
+          scenes: [],
+          latitude: lightDetail?.lat,
+          longitude: lightDetail?.lon
+        };
+        try {
+          const coords = await fetchCoordinatesForLight(lightId, ligToken || undefined);
+          // Filter coords that are actually in the project
+          const validCoords = coords.filter(c => projectCoords.has(c.id));
+          config.coordinates = validCoords.map(c => c.id);
+
+          // Infer Scenes? For now, leave empty unless we can map them.
+          // If we want to be smart, we could try to see if any project scene matches the coordinate's scene.
+          // But we don't have that map easily. 
+          // Let's just leave scenes empty for now, or maybe assign ALL remaining scenes to the first light?
+        } catch (e) {
+          console.error(`Failed to fetch coords for ${lightId}`, e);
+        }
+        configs.push(config);
+      }
+
+      // Fallback: If we have scenes but no way to map them, add them to the first light
+      // so they are visible and editable.
+      if (configs.length > 0) {
+        const unmappedScenes = record.scenes.filter(s => !usedScenes.has(s));
+        if (unmappedScenes.length > 0) {
+          configs[0].scenes.push(...unmappedScenes);
+        }
+      } else if (record.lightIds.length === 0 && record.scenes.length > 0) {
+        // No lights but has scenes. We need a way to show them.
+        // Maybe create a "General" dummy light or just rely on the user adding a light?
+        // No lights but has scenes. We need a way to show them.
+        // Maybe create a "General" dummy light or just rely on the user adding a light?
+        // For now, let's just leave them in formState (which they are), 
+      }
+    } // End of reconstruction block
+
+    // If we have stored lightConfigs, use them to override lat/lon
+    if (record.lightConfigs) {
+      try {
+        const storedConfigs = JSON.parse(record.lightConfigs) as LightConfig[];
+        const storedMap = new Map(storedConfigs.map(c => [c.lightId, c]));
+
+        configs.forEach(config => {
+          const stored = storedMap.get(config.lightId);
+          if (stored) {
+            if (stored.latitude != null) config.latitude = stored.latitude;
+            if (stored.longitude != null) config.longitude = stored.longitude;
+            // We could also restore scenes/coords if we wanted to persist manual changes there too
+          }
+        });
+      } catch (e) {
+        console.error("Failed to parse stored lightConfigs", e);
+      }
+    }
+
+    setLightConfigs(configs);
     setSceneOptions((prev) =>
       mergeOptions(prev, record.scenes.map((value) => ({ value, label: value })))
     );
@@ -4378,119 +4990,200 @@ function SettingsPage({
                   />
                 </label>
                 <label className="form-notes">
-                  Light IDs
-                  <div className="list-picker">
-                    <input
-                      type="search"
-                      list={lightDatalistId}
-                      value={lightSearchInput}
-                      onChange={(event) => setLightSearchInput(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          addLightValue();
-                        }
-                      }}
-                      placeholder="搜尋或輸入 Light ID"
-                      disabled={saving}
-                    />
-                    <datalist id={lightDatalistId}>
-                      {lightOptions.map((option) => (
-                        <option key={option.value} value={option.value} label={option.label} />
-                      ))}
-                    </datalist>
-                    <button
-                      type="button"
-                      onClick={() => addLightValue()}
-                      disabled={!lightSearchInput.trim() || saving}
-                    >
-                      加入
-                    </button>
-                  </div>
-                  {!ligToken && <small>未設定 token 時會使用備援資料。</small>}
-                  {selectedLightItems.length > 0 && (
-                    <div className="selected-tags" aria-live="polite">
-                      {selectedLightItems.map((item) => (
-                        <div key={item.value} className="selected-tags__item">
-                          <span>{item.label}</span>
+                  Light ID Configuration
+                  <div className="light-config-list">
+                    {lightConfigs.map((config) => (
+                      <div key={config.lightId} className="light-config-item panel panel--surface">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="font-medium text-lg text-gray-700">Light ID: {config.lightId}</span>
+                          <div className="flex items-center gap-1">
+                            <span className="text-sm text-gray-500">Lat:</span>
+                            <input
+                              type="number"
+                              step="0.000001"
+                              className="w-24 px-1 py-0.5 border rounded text-sm"
+                              value={config.latitude ?? ""}
+                              onChange={(e) => updateLightConfig(config.lightId, { latitude: e.target.value ? Number(e.target.value) : undefined })}
+                              onPaste={(e) => handleLatLonPaste(e, config.lightId, 'latitude')}
+                              placeholder="Latitude"
+                            />
+                            <span className="text-sm text-gray-500">Lon:</span>
+                            <input
+                              type="number"
+                              step="0.000001"
+                              className="w-24 px-1 py-0.5 border rounded text-sm"
+                              value={config.longitude ?? ""}
+                              onChange={(e) => updateLightConfig(config.lightId, { longitude: e.target.value ? Number(e.target.value) : undefined })}
+                              onPaste={(e) => handleLatLonPaste(e, config.lightId, 'longitude')}
+                              placeholder="Longitude"
+                            />
+                          </div>
                           <button
                             type="button"
-                            className="selected-tags__remove"
-                            onClick={() => removeLightValue(item.value)}
-                            aria-label={`移除 ${item.label}`}
+                            className="button--danger button--small"
+                            onClick={() => removeLightConfig(config.lightId)}
                           >
-                            ×
+                            Remove
                           </button>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </label>
-                <label className="form-notes">
-                  Coordinates (隨 Light ID 載入)
-                  <select
-                    multiple
-                    name="coordinates"
-                    value={formState.coordinates}
-                    onChange={handleArraySelect("coordinates")}
-                    disabled={saving || coordinateOptions.length === 0}
-                  >
-                    {coordinateOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
+
+                        <label>
+                          Coordinates
+                          <div className="scene-tags">
+                            {config.coordinates.map(coord => (
+                              <span key={coord} className="scene-tag">
+                                {coordinateOptions.find(opt => opt.value === coord)?.label || coord}
+                                <button
+                                  type="button"
+                                  className="scene-tag-remove"
+                                  onClick={() => {
+                                    const newCoords = config.coordinates.filter(c => c !== coord);
+                                    updateLightConfig(config.lightId, { coordinates: newCoords });
+                                  }}
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                          <div className="scene-add-row">
+                            <input
+                              list={`coord-options-${config.lightId}`}
+                              placeholder="Search or add coordinate..."
+                              value={coordinateInputs[config.lightId] || ""}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setCoordinateInputs(prev => ({ ...prev, [config.lightId]: val }));
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  const val = coordinateInputs[config.lightId]?.trim();
+                                  // Extract ID if user selected from dropdown (format: "ID-Name")
+                                  const id = val?.split('-')[0].trim();
+                                  if (id && !config.coordinates.includes(id)) {
+                                    updateLightConfig(config.lightId, { coordinates: [...config.coordinates, id] });
+                                    setCoordinateInputs(prev => ({ ...prev, [config.lightId]: "" }));
+                                  }
+                                }
+                              }}
+                            />
+                            <datalist id={`coord-options-${config.lightId}`}>
+                              {coordinateOptions.map(opt => (
+                                <option key={opt.value} value={opt.label} />
+                              ))}
+                            </datalist>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const val = coordinateInputs[config.lightId]?.trim();
+                                const id = val?.split('-')[0].trim();
+                                if (id && !config.coordinates.includes(id)) {
+                                  updateLightConfig(config.lightId, { coordinates: [...config.coordinates, id] });
+                                  setCoordinateInputs(prev => ({ ...prev, [config.lightId]: "" }));
+                                }
+                              }}
+                              disabled={!coordinateInputs[config.lightId]?.trim()}
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </label>
+
+                        <label>
+                          Scenes
+                          <div className="scene-tags">
+                            {config.scenes.map(scene => (
+                              <span key={scene} className="scene-tag">
+                                {scene}
+                                <button
+                                  type="button"
+                                  className="scene-tag-remove"
+                                  onClick={() => {
+                                    const newScenes = config.scenes.filter(s => s !== scene);
+                                    updateLightConfig(config.lightId, { scenes: newScenes });
+                                  }}
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                          <div className="scene-add-row">
+                            <input
+                              list={`scene-options-${config.lightId}`}
+                              placeholder="Search or add scene..."
+                              value={sceneInputs[config.lightId] || ""}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setSceneInputs(prev => ({ ...prev, [config.lightId]: val }));
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  const val = sceneInputs[config.lightId]?.trim();
+                                  if (val && !config.scenes.includes(val)) {
+                                    updateLightConfig(config.lightId, { scenes: [...config.scenes, val] });
+                                    setSceneInputs(prev => ({ ...prev, [config.lightId]: "" }));
+                                  }
+                                }
+                              }}
+                            />
+                            <datalist id={`scene-options-${config.lightId}`}>
+                              {sceneOptions.map(opt => (
+                                <option key={opt.value} value={opt.value} />
+                              ))}
+                            </datalist>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const val = sceneInputs[config.lightId]?.trim();
+                                if (val && !config.scenes.includes(val)) {
+                                  updateLightConfig(config.lightId, { scenes: [...config.scenes, val] });
+                                  setSceneInputs(prev => ({ ...prev, [config.lightId]: "" }));
+                                }
+                              }}
+                              disabled={!sceneInputs[config.lightId]?.trim()}
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </label>
+                      </div>
                     ))}
-                  </select>
-                  {loadingCoordinateOptions && <small>座標載入中…</small>}
-                </label>
-                <label className="form-notes">
-                  Scenes
-                  <div className="list-picker">
+                  </div>
+
+                  <div className="add-light-row">
                     <input
-                      type="search"
-                      list={sceneDatalistId}
-                      value={sceneSearchInput}
-                      onChange={(event) => setSceneSearchInput(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          addSceneValue();
+                      type="text"
+                      placeholder="Enter Light ID"
+                      value={newLightIdInput}
+                      onChange={(e) => setNewLightIdInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addLightConfig();
                         }
                       }}
-                      placeholder="搜尋或輸入 Scene"
-                      disabled={saving}
+                      list="light-id-options"
                     />
-                    <datalist id={sceneDatalistId}>
-                      {sceneOptions.map((option) => (
-                        <option key={option.value} value={option.value} label={option.label} />
+                    <datalist id="light-id-options">
+                      {lightOptions.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </option>
                       ))}
                     </datalist>
                     <button
                       type="button"
-                      onClick={() => addSceneValue()}
-                      disabled={!sceneSearchInput.trim() || saving}
+                      onClick={() => addLightConfig()}
+                      disabled={!newLightIdInput.trim()}
                     >
-                      加入
+                      Add Light ID
                     </button>
                   </div>
-                  {selectedSceneItems.length > 0 && (
-                    <div className="selected-tags" aria-live="polite">
-                      {selectedSceneItems.map((item) => (
-                        <div key={item.value} className="selected-tags__item">
-                          <span>{item.label}</span>
-                          <button
-                            type="button"
-                            className="selected-tags__remove"
-                            onClick={() => removeSceneValue(item.value)}
-                            aria-label={`移除 ${item.label}`}
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </label>
+
                 <label>
                   Is Active
                   <input
@@ -4506,16 +5199,7 @@ function SettingsPage({
                     disabled={saving}
                   />
                 </label>
-                <label>
-                  Latitude and Longitude
-                  <input
-                    name="latLon"
-                    value={formState.latLon}
-                    onChange={handleInputChange}
-                    placeholder="25.0495, 121.5235"
-                    disabled={saving}
-                  />
-                </label>
+
                 <label className="form-notes">
                   Owner Emails
                   <select
@@ -4550,7 +5234,7 @@ function SettingsPage({
                     </button>
                   </div>
                 </label>
-              </div>
+              </div >
               <div className="form-actions">
                 <button type="submit" className="primary" disabled={saving}>
                   {formState.id ? "更新專案" : "新增專案"}
@@ -4566,141 +5250,144 @@ function SettingsPage({
                   </button>
                 )}
               </div>
-            </form>
+            </form >
 
             {projectsError && (
               <p className="form-error">⚠️ {projectsError}</p>
-            )}
+            )
+            }
 
-            {loadingProjects ? (
-              <p>專案資料載入中…</p>
-            ) : projects.length === 0 ? (
-              <p>目前沒有任何專案紀錄。</p>
-            ) : (
-              <div className="project-viewer">
-                <div className="project-viewer__search">
-                  <input
-                    type="search"
-                    value={projectSearchTerm}
-                    onChange={(event) => setProjectSearchTerm(event.target.value)}
-                    placeholder="搜尋專案名稱或 ID"
-                  />
-                  {projectSearchTerm && (
-                    <button
-                      type="button"
-                      onClick={() => setProjectSearchTerm("")}
-                      aria-label="清除搜尋"
-                    >
-                      清除
-                    </button>
+            {
+              loadingProjects ? (
+                <p>專案資料載入中…</p>
+              ) : projects.length === 0 ? (
+                <p>目前沒有任何專案紀錄。</p>
+              ) : (
+                <div className="project-viewer">
+                  <div className="project-viewer__search">
+                    <input
+                      type="search"
+                      value={projectSearchTerm}
+                      onChange={(event) => setProjectSearchTerm(event.target.value)}
+                      placeholder="搜尋專案名稱或 ID"
+                    />
+                    {projectSearchTerm && (
+                      <button
+                        type="button"
+                        onClick={() => setProjectSearchTerm("")}
+                        aria-label="清除搜尋"
+                      >
+                        清除
+                      </button>
+                    )}
+                  </div>
+                  {projectSelectOptions.length === 0 ? (
+                    <p className="field-hint">無符合搜尋條件的專案。</p>
+                  ) : (
+                    <label className="project-viewer__select">
+                      選擇專案
+                      <select
+                        value={selectedProjectId}
+                        onChange={(event) => setSelectedProjectId(event.target.value)}
+                      >
+                        {projectSelectOptions.map((project) => (
+                          <option key={project.id} value={project.id}>
+                            ({project.projectId ? `#${project.projectId}` : "#-"}){" "}
+                            {project.projectName || "未命名專案"}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {selectedProject ? (
+                    <div className="project-details">
+                      <div className="project-details__header">
+                        <div>
+                          <div className="project-details__title">{selectedProject.projectName}</div>
+                          <small className="project-details__subtitle">
+                            Airtable ID: {selectedProject.id}
+                          </small>
+                        </div>
+                        <div className="project-details__actions">
+                          <button type="button" onClick={() => startEdit(selectedProject)} disabled={saving}>
+                            編輯
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(selectedProject.id)}
+                            disabled={saving}
+                          >
+                            刪除
+                          </button>
+                        </div>
+                      </div>
+                      <div className="project-details__grid">
+                        <div className="project-details__item">
+                          <div className="project-details__label">Project ID</div>
+                          <div className="project-details__value">
+                            {selectedProject.projectId || "-"}
+                          </div>
+                        </div>
+                        <div className="project-details__item">
+                          <div className="project-details__label">開始日期</div>
+                          <div className="project-details__value">
+                            {selectedProject.startDate ?? "-"}
+                          </div>
+                        </div>
+                        <div className="project-details__item">
+                          <div className="project-details__label">結束日期</div>
+                          <div className="project-details__value">
+                            {selectedProject.endDate ?? "-"}
+                          </div>
+                        </div>
+                        <div className="project-details__item">
+                          <div className="project-details__label">座標</div>
+                          <div className="project-details__value">
+                            {formatArrayValue(selectedProject.coordinates)}
+                          </div>
+                        </div>
+                        <div className="project-details__item">
+                          <div className="project-details__label">Light IDs</div>
+                          <div className="project-details__value">
+                            {formatArrayValue(selectedProject.lightIds)}
+                          </div>
+                        </div>
+                        <div className="project-details__item">
+                          <div className="project-details__label">Scenes</div>
+                          <div className="project-details__value">
+                            {formatArrayValue(selectedProject.scenes)}
+                          </div>
+                        </div>
+                        <div className="project-details__item">
+                          <div className="project-details__label">Active</div>
+                          <div className="project-details__value">
+                            {selectedProject.isActive ? "Yes" : "No"}
+                          </div>
+                        </div>
+                        <div className="project-details__item">
+                          <div className="project-details__label">Lat / Lon</div>
+                          <div className="project-details__value">
+                            {selectedProject.latLon ?? "-"}
+                          </div>
+                        </div>
+                        <div className="project-details__item project-details__item--wide">
+                          <div className="project-details__label">Owner Emails</div>
+                          <div className="project-details__value">
+                            {formatArrayValue(selectedProject.ownerEmails)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="field-hint">請選擇專案以檢視詳細資料。</p>
                   )}
                 </div>
-                {projectSelectOptions.length === 0 ? (
-                  <p className="field-hint">無符合搜尋條件的專案。</p>
-                ) : (
-                  <label className="project-viewer__select">
-                    選擇專案
-                    <select
-                      value={selectedProjectId}
-                      onChange={(event) => setSelectedProjectId(event.target.value)}
-                    >
-                      {projectSelectOptions.map((project) => (
-                        <option key={project.id} value={project.id}>
-                          ({project.projectId ? `#${project.projectId}` : "#-"}){" "}
-                          {project.projectName || "未命名專案"}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                {selectedProject ? (
-                  <div className="project-details">
-                    <div className="project-details__header">
-                      <div>
-                        <div className="project-details__title">{selectedProject.projectName}</div>
-                        <small className="project-details__subtitle">
-                          Airtable ID: {selectedProject.id}
-                        </small>
-                      </div>
-                      <div className="project-details__actions">
-                        <button type="button" onClick={() => startEdit(selectedProject)} disabled={saving}>
-                          編輯
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(selectedProject.id)}
-                          disabled={saving}
-                        >
-                          刪除
-                        </button>
-                      </div>
-                    </div>
-                    <div className="project-details__grid">
-                      <div className="project-details__item">
-                        <div className="project-details__label">Project ID</div>
-                        <div className="project-details__value">
-                          {selectedProject.projectId || "-"}
-                        </div>
-                      </div>
-                      <div className="project-details__item">
-                        <div className="project-details__label">開始日期</div>
-                        <div className="project-details__value">
-                          {selectedProject.startDate ?? "-"}
-                        </div>
-                      </div>
-                      <div className="project-details__item">
-                        <div className="project-details__label">結束日期</div>
-                        <div className="project-details__value">
-                          {selectedProject.endDate ?? "-"}
-                        </div>
-                      </div>
-                      <div className="project-details__item">
-                        <div className="project-details__label">座標</div>
-                        <div className="project-details__value">
-                          {formatArrayValue(selectedProject.coordinates)}
-                        </div>
-                      </div>
-                      <div className="project-details__item">
-                        <div className="project-details__label">Light IDs</div>
-                        <div className="project-details__value">
-                          {formatArrayValue(selectedProject.lightIds)}
-                        </div>
-                      </div>
-                      <div className="project-details__item">
-                        <div className="project-details__label">Scenes</div>
-                        <div className="project-details__value">
-                          {formatArrayValue(selectedProject.scenes)}
-                        </div>
-                      </div>
-                      <div className="project-details__item">
-                        <div className="project-details__label">Active</div>
-                        <div className="project-details__value">
-                          {selectedProject.isActive ? "Yes" : "No"}
-                        </div>
-                      </div>
-                      <div className="project-details__item">
-                        <div className="project-details__label">Lat / Lon</div>
-                        <div className="project-details__value">
-                          {selectedProject.latLon ?? "-"}
-                        </div>
-                      </div>
-                      <div className="project-details__item project-details__item--wide">
-                        <div className="project-details__label">Owner Emails</div>
-                        <div className="project-details__value">
-                          {formatArrayValue(selectedProject.ownerEmails)}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="field-hint">請選擇專案以檢視詳細資料。</p>
-                )}
-              </div>
-            )}
+              )
+            }
           </>
         )}
-      </div>
-    </div>
+      </div >
+    </div >
   );
 }
 
@@ -5084,14 +5771,16 @@ function buildUserAcquisitionPlot(
     },
     yaxis: {
       title: { text: "每日用戶數" },
-      showgrid: true,
+      showgrid: false,
       gridcolor: "#e4edf5",
+      rangemode: "tozero",
     },
     yaxis2: {
       title: { text: "累積用戶" },
       overlaying: "y",
       side: "right",
       showgrid: false,
+      rangemode: "tozero",
     },
     legend: {
       orientation: "h",

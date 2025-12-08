@@ -5,11 +5,12 @@ const router = express.Router();
 const API_BASE = process.env.LIG_API_BASE || 'https://api.lig.com.tw';
 
 // Helper to forward requests
-const forwardRequest = async (req: express.Request, res: express.Response, method: 'GET' | 'POST', endpoint: string, data?: any) => {
+const forwardRequest = async (req: express.Request, res: express.Response, method: 'GET' | 'POST', endpoint: string, data?: any, params?: any) => {
     try {
         const url = `${API_BASE}${endpoint}`;
         const headers: any = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*',
         };
         if (method !== 'GET') {
             headers['Content-Type'] = 'application/json';
@@ -21,12 +22,17 @@ const forwardRequest = async (req: express.Request, res: express.Response, metho
         }
 
         console.log(`[LiG] Proxying ${method} ${url}`);
-        // console.log(`[LiG] Headers:`, JSON.stringify(headers, null, 2));
+        console.log(`[LiG] Upstream URL: ${url}`);
+        console.log(`[LiG] Request Headers:`, JSON.stringify(headers, null, 2));
+        if (params) {
+            console.log(`[LiG] Query Params:`, JSON.stringify(params, null, 2));
+        }
 
         const response = await axios({
             method,
             url,
             headers,
+            params,
             data: method === 'GET' ? undefined : data,
         });
 
@@ -38,7 +44,12 @@ const forwardRequest = async (req: express.Request, res: express.Response, metho
         if (error.response?.headers) {
             console.error(`[LiG] Response Headers:`, JSON.stringify(error.response.headers, null, 2));
         }
-        res.status(error.response?.status || 500).json(error.response?.data || { error: 'Proxy request failed' });
+        res.status(error.response?.status || 500).json({
+            error: 'Proxy request failed',
+            upstreamStatus: error.response?.status,
+            upstreamData: error.response?.data,
+            upstreamHeaders: error.response?.headers
+        });
     }
 };
 
@@ -76,6 +87,10 @@ router.get('/api/v1/lights/:id', async (req, res) => {
     await forwardRequest(req, res, 'GET', `/api/v1/lights/${req.params.id}`);
 });
 
+router.get('/api/v1/lightids/:id', async (req, res) => {
+    await forwardRequest(req, res, 'GET', `/api/v1/lightids/${req.params.id}`);
+});
+
 router.get('/api/scenes', async (req, res) => {
     await forwardRequest(req, res, 'GET', '/api/scenes');
 });
@@ -89,11 +104,15 @@ router.get('/api/v1/coordinate_systems', async (req, res) => {
 });
 
 router.get('/api/v1/ar_objects', async (req, res) => {
-    await forwardRequest(req, res, 'GET', '/api/v1/ar_objects');
+    await forwardRequest(req, res, 'GET', req.path, undefined, req.query);
 });
 
 router.get('/api/v1/ar_objects/:id', async (req, res) => {
     await forwardRequest(req, res, 'GET', `/api/v1/ar_objects/${req.params.id}`);
+});
+
+router.get('/api/v1/ar_objects_list/:id', async (req, res) => {
+    await forwardRequest(req, res, 'GET', `/api/v1/ar_objects_list/${req.params.id}`);
 });
 
 export default router;
