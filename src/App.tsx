@@ -39,8 +39,6 @@ import {
   computeProjectFunnelRows,
   computeClickDaypartStats,
   computeProjectObjectAttribution,
-  computeSceneComparisonStats,
-  computeLightPerformanceStats,
   computeSceneTimeStats,
   computeMergedPerformanceStats,
   buildProjectScanIndex,
@@ -58,8 +56,6 @@ import {
   type ProjectFunnelRow,
   type ClickDaypartStats,
   type ProjectObjectAttributionRow,
-  type SceneComparisonRow,
-  type LightPerformanceRow,
   type SceneTimeComparisonRow,
   type MergedPerformanceRow,
 } from "./utils/stats";
@@ -1141,7 +1137,6 @@ interface AllProjectsPageProps {
 }
 
 function AllProjectsPage({
-  summary,
   projectRankRows,
   dailySeries,
   dailyClickSeries,
@@ -2429,9 +2424,7 @@ function ProjectDetailPage({
   totalUsersAllTime,
   dailySeries,
   dailyClickSeries,
-  scanVolumeDaily,
   scanVolumeMonthly,
-  userAcquisitionDaily,
   userAcquisitionRangeSeries,
   userAcquisitionMonthly,
   clickRanking,
@@ -4159,7 +4152,7 @@ function SettingsPage({
   const handleLatLonPaste = (
     e: React.ClipboardEvent<HTMLInputElement>,
     lightId: string,
-    field: 'latitude' | 'longitude'
+    _field: 'latitude' | 'longitude'
   ) => {
     const text = e.clipboardData.getData('text');
     if (!text) return;

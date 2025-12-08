@@ -12,7 +12,7 @@ import {
   subMonths,
 } from "date-fns";
 import type {
-  ClickRecord, DashboardData, Project, ScanRecord, UserBehaviorStats,
+  ClickRecord, DashboardData, Project, ScanRecord,
   LightConfig,
 } from "../types";
 
