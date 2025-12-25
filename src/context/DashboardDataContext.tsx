@@ -122,6 +122,18 @@ export function DashboardDataProvider({
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Unknown data loading error";
+
+        // Check for specific upstream error indicating expired session/signature
+        if (message.includes("Signature has expired")) {
+          console.warn("[DashboardData] Session/Signature expired, clearing token and reloading...");
+          if (typeof window !== "undefined") {
+            window.localStorage.removeItem("lig_token");
+            // Small delay to ensure storage is cleared before reload
+            setTimeout(() => window.location.reload(), 100);
+            return;
+          }
+        }
+
         if (isMounted) {
           setState({ status: "error", error: message });
         }

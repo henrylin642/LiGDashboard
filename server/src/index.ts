@@ -22,6 +22,25 @@ app.get('/health', (req, res) => {
     res.send('Server is running');
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
+
+server.on('error', (err) => {
+    console.error('Server error:', err);
+});
+
+// Debug: Keep the process alive. This prevents the process from exiting 
+// if the event loop drains for some reason (e.g. socket close).
+setInterval(() => {
+    // Heartbeat
+}, 30000);
+
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
