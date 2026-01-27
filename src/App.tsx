@@ -4513,6 +4513,9 @@ function SettingsPage({
 
   async function startEdit(record: AirtableProject) {
     console.log("[App] startEdit called with:", record);
+    // Scroll to top so user sees the form
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
     setSelectedProjectId(record.id);
     const newState = {
       id: record.id,
