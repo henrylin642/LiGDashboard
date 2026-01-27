@@ -4017,6 +4017,8 @@ function SettingsPage({
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [projectSearchTerm, setProjectSearchTerm] = useState("");
 
+  console.log("[Render] current formState:", formState);
+
   const [ligToken, setLigToken] = useState<string>(() => {
     if (typeof window === "undefined") return "";
     return window.localStorage.getItem("lig_token") ?? "";
