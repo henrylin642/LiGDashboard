@@ -1,6 +1,10 @@
 {
     "rewrites": [
         {
+            "source": "/api/lig/(.*)",
+            "destination": "/api/lig?path=$1"
+        },
+        {
             "source": "/((?!api/.*).*)",
             "destination": "/index.html"
         }
