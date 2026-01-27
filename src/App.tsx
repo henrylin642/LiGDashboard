@@ -4510,8 +4510,9 @@ function SettingsPage({
   }
 
   async function startEdit(record: AirtableProject) {
+    console.log("[App] startEdit called with:", record);
     setSelectedProjectId(record.id);
-    setFormState({
+    const newState = {
       id: record.id,
       projectId: record.projectId,
       projectName: record.projectName,
@@ -4524,7 +4525,9 @@ function SettingsPage({
       latLon: record.latLon ?? "",
       ownerEmails: record.ownerEmails,
       lightConfigs: record.lightConfigs ?? "",
-    });
+    };
+    console.log("[App] Setting formState to:", newState);
+    setFormState(newState);
 
     setCustomOwnerEmails((prev) => {
       const set = new Set(prev);
