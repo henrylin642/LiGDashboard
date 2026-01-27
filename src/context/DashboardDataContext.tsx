@@ -265,14 +265,14 @@ async function loadProjects(): Promise<Project[]> {
           name: item.projectName.trim() || `Project ${parsedId}`,
           startDate,
           endDate,
-          coordinates: item.coordinates ?? [],
+          coordinates: Array.isArray(item.coordinates) ? item.coordinates : [],
           lightIds: (Array.isArray(item.lightIds) ? item.lightIds : [])
             .map((value) => parseNumber(value))
             .filter((value): value is number => value !== null),
-          scenes: item.scenes ?? [],
+          scenes: Array.isArray(item.scenes) ? item.scenes : [],
           isActive: item.isActive,
           latLon,
-          ownerEmails: [...(item.ownerEmails ?? [])].sort(),
+          ownerEmails: Array.isArray(item.ownerEmails) ? [...item.ownerEmails].sort() : [],
           lightConfigs,
         });
       }
