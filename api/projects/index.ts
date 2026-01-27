@@ -116,7 +116,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
             if (error) throw error;
 
-            return res.status(200).json(data);
+            // Transform back to Airtable format for frontend compatibility
+            const responseData = {
+                id: data.id,
+                createdTime: data.created_at,
+                fields: {
+                    'ProjectID': data.project_id,
+                    'Project Name': data.name,
+                    'Start Date': data.start_date,
+                    'End Date': data.end_date,
+                    'Coordinates': data.coordinates,
+                    'Light ID': data.light_ids,
+                    'Scenes': data.scenes,
+                    'Is Active': data.is_active,
+                    'Latitude and Longitude': data.lat_lon,
+                    'Owner Email': data.owner_emails,
+                    'Light Configs': data.light_configs
+                }
+            };
+
+            return res.status(200).json(responseData);
         } catch (error: any) {
             console.error('Error creating project:', error.message);
             return res.status(500).json({ error: 'Failed to create project', details: error.message });

@@ -86,12 +86,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const { data, error } = await supabase
                 .from('projects')
                 .update(payload)
-                .eq('id', id) // Assuming id is UUID
-                .select();
+                .eq('id', id)
+                .select()
+                .single(); // Ensure we get a single object, not an array
 
             if (error) throw error;
 
-            return res.status(200).json(data);
+            // Transform back to Airtable format for frontend compatibility
+            // See src/services/airtable.ts for field names
+            const responseData = {
+                id: data.id,
+                createdTime: data.created_at,
+                fields: {
+                    'ProjectID': data.project_id,
+                    'Project Name': data.name,
+                    'Start Date': data.start_date,
+                    'End Date': data.end_date,
+                    'Coordinates': data.coordinates, // Array or string? Supabase stores arrays as JSON
+                    'Light ID': data.light_ids,
+                    'Scenes': data.scenes,
+                    'Is Active': data.is_active,
+                    'Latitude and Longitude': data.lat_lon,
+                    'Owner Email': data.owner_emails,
+                    'Light Configs': data.light_configs
+                }
+            };
+
+            // Handle array fields being strings (if legacy data)
+            // But Supabase JSON/Arrays should be fine. The frontend parseList handles string|array.
+
+            return res.status(200).json(responseData);
         } catch (error: any) {
             console.error('Error updating project:', error.message);
             return res.status(500).json({ error: 'Failed to update project', details: error.message });
