@@ -14,6 +14,16 @@ function parseJson<T>(text: string | null): T | null {
 }
 
 export async function triggerDataSync(signal?: AbortSignal): Promise<DataSyncResult> {
+  // The internal-data-sync API is provided by a Vite plugin which is only available
+  // in the local development server (npm run dev).
+  // In production builds (Vercel/build), this plugin does not exist.
+  if (!import.meta.env.DEV) {
+    throw new Error(
+      "資料來源更新功能僅支援「本地開發環境 (npm run dev)」。\n" +
+      "線上環境 (Vercel/Render) 無法直接連接內部伺服器同步檔案。"
+    );
+  }
+
   const response = await fetch("/api/internal-data-sync", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

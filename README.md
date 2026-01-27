@@ -13,12 +13,32 @@
 
 ## 開發流程
 
+### 1. 環境變數設定
+
+請確保根目錄有 `.env.local` 檔案（用於前端），以及 `server` 目錄下有 `.env` 檔案（用於後端）。
+
+### 2. 資料庫與 API 服務 (Backend)
+
+本專案使用 Express 作為後端 Proxy 伺服器，負責與 Airtable、Google Drive 及 LiG API 溝通。
+
+```bash
+cd server
+npm install
+npm run dev
+```
+
+後端服務預設運行於 `http://localhost:3001`。
+
+### 3. 前端介面 (Frontend)
+
+開啟一個新的終端機視窗，回到專案根目錄並啟動前端開發伺服器：
+
 ```bash
 npm install
 npm run dev
 ```
 
-啟動後預設會在 `http://localhost:5173/` 提供開發伺服器。
+前端服務預設運行於 `http://localhost:5173`，且已設定 Proxy 將 `/api` 請求轉發至後端 (localhost:3001)。
 
 ## 打包
 
