@@ -1,6 +1,5 @@
 import { useState, useMemo } from "react";
 import { useDashboardData } from "../context/DashboardDataContext";
-import type { ScanRecord } from "../types";
 import { format } from "date-fns";
 
 export function LightIdStatsPage() {
