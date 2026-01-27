@@ -115,8 +115,15 @@ export async function fetchProjects(): Promise<AirtableProject[]> {
   }
 
   const json = await response.json();
-  // Backend already maps the data for GET /api/projects
-  return json as AirtableProject[];
+
+  // Ensure array fields are actually arrays, as backend might sometimes return strings
+  return (json as any[]).map((item) => ({
+    ...item,
+    coordinates: Array.isArray(item.coordinates) ? item.coordinates : parseList(item.coordinates),
+    lightIds: Array.isArray(item.lightIds) ? item.lightIds : parseList(item.lightIds),
+    scenes: Array.isArray(item.scenes) ? item.scenes : parseList(item.scenes),
+    ownerEmails: Array.isArray(item.ownerEmails) ? item.ownerEmails : parseList(item.ownerEmails),
+  })) as AirtableProject[];
 }
 
 export interface SaveProjectPayload {
