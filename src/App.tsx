@@ -16,6 +16,7 @@ import {
 import "./App.css";
 import { useDashboardData } from "./context/DashboardDataContext";
 import { ProjectFunnelTable } from "./components/ProjectFunnelTable";
+import { LightIdStatsPage } from "./components/LightIdStatsPage";
 import {
   computeClickRanking,
   buildClickSessionAnalytics,
@@ -195,7 +196,7 @@ import { triggerDataSync } from "./services/dataSync";
 
 type ScopedData = DashboardData;
 
-type PageKey = "all" | "project" | "wall" | "settings";
+type PageKey = "all" | "project" | "wall" | "settings" | "lightStats";
 
 interface DateRange {
   start: Date;
@@ -991,6 +992,14 @@ function App() {
             </button>
             <button
               type="button"
+              className={`app__nav-button${page === "lightStats" ? " app__nav-button--active" : ""
+                }`}
+              onClick={() => setPage("lightStats")}
+            >
+              LightID 統計
+            </button>
+            <button
+              type="button"
               className={`app__nav-button${page === "wall" ? " app__nav-button--active" : ""
                 }`}
               onClick={() => setPage("wall")}
@@ -1087,6 +1096,7 @@ function App() {
             userAcquisitionMonthly={userAcquisitionMonthly}
           />
         )}
+        {page === "lightStats" && <LightIdStatsPage />}
         {page === "settings" && (
           <SettingsPage ownerOptions={ownerOptions} onNavigateHome={() => setPage("all")} onReloadData={dataState.reloadProjects} />
         )}
