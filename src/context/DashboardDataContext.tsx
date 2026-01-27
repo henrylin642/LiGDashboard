@@ -266,7 +266,7 @@ async function loadProjects(): Promise<Project[]> {
           startDate,
           endDate,
           coordinates: item.coordinates ?? [],
-          lightIds: (item.lightIds ?? [])
+          lightIds: (Array.isArray(item.lightIds) ? item.lightIds : [])
             .map((value) => parseNumber(value))
             .filter((value): value is number => value !== null),
           scenes: item.scenes ?? [],
