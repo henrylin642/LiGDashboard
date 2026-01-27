@@ -5718,7 +5718,7 @@ function createProjectScope(
 
 function createDefaultRange(): DateRange {
   const end = new Date();
-  const start = subDays(end, 13);
+  const start = startOfMonth(end);
   return { start, end };
 }
 
