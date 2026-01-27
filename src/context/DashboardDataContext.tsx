@@ -291,7 +291,13 @@ async function loadProjects(): Promise<Project[]> {
 }
 
 async function loadScans(): Promise<ScanRecord[]> {
+  let loggedFirst = false;
   return fetchCsv<ScanRecord>("/api/data/scandata.csv", (row) => {
+    if (!loggedFirst) {
+      console.log("[DashboardData] loadScans first row keys:", Object.keys(row));
+      console.log("[DashboardData] loadScans first row values:", row);
+      loggedFirst = true;
+    }
     const ligId = parseNumber(row["ligtag_id"]);
     if (ligId === null) return null;
     const time = parseDate(row["time"]);
