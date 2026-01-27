@@ -1,11 +1,11 @@
 import { useState, useMemo } from "react";
 import { useDashboardData } from "../context/DashboardDataContext";
-import { format } from "date-fns";
+import { format, startOfMonth } from "date-fns";
 
 export function LightIdStatsPage() {
     const { status, data } = useDashboardData();
     const [startDate, setStartDate] = useState<string>(
-        format(new Date(new Date().setDate(new Date().getDate() - 30)), "yyyy-MM-dd")
+        format(startOfMonth(new Date()), "yyyy-MM-dd")
     );
     const [endDate, setEndDate] = useState<string>(format(new Date(), "yyyy-MM-dd"));
 
