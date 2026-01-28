@@ -309,38 +309,7 @@ export async function fetchAssetsWithMeta(token?: Token): Promise<AssetDetail[]>
     .filter(Boolean) as AssetDetail[];
 }
 
-export async function fetchCoordinateSystemsWithMeta(
-  token?: Token
-): Promise<CoordinateSystemDetail[]> {
-  if (!token) return [];
-  const res = await fetch(`${API_BASE}/api/v1/coordinate_systems`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    throw new Error(`${res.status} ${await res.text()}`);
-  }
-  const data = await res.json();
-  const list = Array.isArray(data)
-    ? data
-    : Array.isArray((data as any).coordinate_systems)
-      ? (data as any).coordinate_systems
-      : Array.isArray((data as any).scenes)
-        ? (data as any).scenes
-        : [];
-  return list
-    .map((item: any) => {
-      const id = String(item.id ?? item.coordinate_system_id ?? "").trim();
-      const name = String(item.name ?? item.label ?? "").trim();
-      if (!id || !name) return null;
-      return {
-        id,
-        name,
-        projectId: item.project_id ?? item.projectId ?? null,
-        raw: item,
-      } as CoordinateSystemDetail;
-    })
-    .filter(Boolean) as CoordinateSystemDetail[];
-}
+
 
 export async function fetchArObjectsForLight(
   lightId: number,
@@ -527,35 +496,95 @@ export async function fetchArObjectById(
   };
 }
 
+// ... existing imports ...
+
+export async function fetchCoordinateSystemsWithMeta(
+  token?: Token
+): Promise<CoordinateSystemDetail[]> {
+  if (!token) return [];
+
+  const tryEndpoints = [
+    `${API_BASE}/api/v3/coordinate_systems`,
+    `${API_BASE}/api/coordinate_systems`
+  ];
+
+  for (const endpoint of tryEndpoints) {
+    try {
+      const res = await fetch(endpoint, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) continue;
+
+      const json = await res.json();
+      // V3 usually returns { data: [...] } or just [...]
+      const items = Array.isArray(json)
+        ? json
+        : Array.isArray((json as any).data)
+          ? (json as any).data
+          : Array.isArray((json as any).coordinate_systems)
+            ? (json as any).coordinate_systems
+            : [];
+
+      if (items.length > 0) {
+        return items.map((item: any) => ({
+          id: String(item.id ?? item.coordinate_system_id ?? "").trim(),
+          name: String(item.name ?? item.coordinate_system_name ?? "").trim(),
+          projectId: item.project_id ?? item.projectId,
+          raw: item
+        })).filter((i: any) => i.id && i.name);
+      }
+    } catch (e) {
+      console.warn(`Failed to fetch CS from ${endpoint}`, e);
+    }
+  }
+  return [];
+}
+
+// ... other functions ...
+
 export async function fetchLights(token?: Token): Promise<LightDetail[]> {
   if (!token) return [];
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
 
-  try {
-    const res = await fetch(`${API_BASE}/api/v1/lights?limit=10000`, { headers });
-    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  const endpoints = [
+    `${API_BASE}/api/v3/lights?limit=10000`,
+    `${API_BASE}/api/v1/lights?limit=10000`
+  ];
 
-    const data = await res.json();
-    const items = Array.isArray(data) ? data : (data.lights || []);
+  for (const url of endpoints) {
+    try {
+      const res = await fetch(url, { headers });
+      if (!res.ok) continue;
 
-    return items.map((item: any) => {
-      const id = String(item.id ?? item.light_id ?? "").trim();
-      if (!id) return null;
+      const data = await res.json();
+      const items = Array.isArray(data)
+        ? data
+        : Array.isArray((data as any).data)
+          ? (data as any).data
+          : (data.lights || []);
 
-      return {
-        id,
-        name: String(item.name ?? item.label ?? "").trim(),
-        latitude: Number(item.latitude) || null,
-        longitude: Number(item.longitude) || null,
-        fieldId: Number(item.field_id ?? item.group_id) || null,
-        coordinateSystemId: Number(item.coordinate_system_id) || null,
-        coordinateSystemName: String(item.coordinate_system_name ?? "").trim() || null,
-        updatedAt: item.updated_at ?? null,
-        raw: item
-      } as LightDetail;
-    }).filter(Boolean) as LightDetail[];
-  } catch (error) {
-    console.error("fetchLights failed", error);
-    return [];
+      if (items.length > 0) {
+        return items.map((item: any) => {
+          const id = String(item.id ?? item.light_id ?? "").trim();
+          if (!id) return null;
+
+          return {
+            id,
+            name: String(item.name ?? item.label ?? "").trim(),
+            latitude: Number(item.latitude) || null,
+            longitude: Number(item.longitude) || null,
+            fieldId: Number(item.field_id ?? item.group_id) || null,
+            coordinateSystemId: item.coordinate_system_id !== null && item.coordinate_system_id !== undefined ? Number(item.coordinate_system_id) : null,
+            coordinateSystemName: String(item.coordinate_system_name ?? "").trim() || null,
+            updatedAt: item.updated_at ?? null,
+            raw: item
+          } as LightDetail;
+        }).filter(Boolean) as LightDetail[];
+      }
+    } catch (error) {
+      console.warn(`fetchLights failed for ${url}`, error);
+    }
   }
+
+  return [];
 }
