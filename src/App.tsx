@@ -17,6 +17,7 @@ import "./App.css";
 import { useDashboardData } from "./context/DashboardDataContext";
 import { ProjectFunnelTable } from "./components/ProjectFunnelTable";
 import { LightIdStatsPage } from "./components/LightIdStatsPage";
+import { SceneStatsPage } from "./components/SceneStatsPage";
 import {
   computeClickRanking,
   buildClickSessionAnalytics,
@@ -196,7 +197,7 @@ import { triggerDataSync } from "./services/dataSync";
 
 type ScopedData = DashboardData;
 
-type PageKey = "all" | "project" | "wall" | "settings" | "lightStats";
+type PageKey = "all" | "project" | "wall" | "settings" | "lightStats" | "sceneStats";
 
 interface DateRange {
   start: Date;
@@ -1097,6 +1098,7 @@ function App() {
           />
         )}
         {page === "lightStats" && <LightIdStatsPage />}
+        {page === "sceneStats" && <SceneStatsPage />}
         {page === "settings" && (
           <SettingsPage ownerOptions={ownerOptions} onNavigateHome={() => setPage("all")} onReloadData={dataState.reloadProjects} />
         )}

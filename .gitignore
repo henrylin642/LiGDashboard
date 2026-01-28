@@ -31,3 +31,4 @@ dashboard-lig-*.json
 
 # Local Data
 public/data
+.vercel
