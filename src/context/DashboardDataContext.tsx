@@ -267,7 +267,13 @@ async function loadProjects(): Promise<Project[]> {
           endDate,
           coordinates: Array.isArray(item.coordinates) ? item.coordinates : [],
           lightIds: (Array.isArray(item.lightIds) ? item.lightIds : [])
-            .map((value) => parseNumber(value))
+            .map((value) => {
+              const num = parseNumber(value);
+              if (item.projectId === '27' || item.projectId === 27) {
+                console.log(`[Debug Project 27] parsing lightId:`, value, typeof value, '->', num);
+              }
+              return num;
+            })
             .filter((value): value is number => value !== null),
           scenes: Array.isArray(item.scenes) ? item.scenes : [],
           isActive: item.isActive,
@@ -275,6 +281,10 @@ async function loadProjects(): Promise<Project[]> {
           ownerEmails: Array.isArray(item.ownerEmails) ? [...item.ownerEmails].sort() : [],
           lightConfigs,
         });
+        if (item.projectId === '27' || item.projectId === 27) {
+          console.log(`[Debug Project 27] Raw:`, item);
+          console.log(`[Debug Project 27] Parsed LightIds:`, projects[projects.length - 1].lightIds);
+        }
       }
       if (projects.length > 0) {
         return projects;
