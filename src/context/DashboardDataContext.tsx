@@ -14,7 +14,6 @@ import {
 import {
   fetchLights,
   fetchCoordinateSystemsWithMeta,
-  fetchArObjectsForLight,
   fetchScenesWithMeta,
 } from "../services/ligApi";
 import { fetchProjects as fetchAirtableProjects } from "../services/airtable";
@@ -22,7 +21,6 @@ import type {
   ArObjectRecord,
   ClickRecord,
   CoordinateSystemRecord,
-  DashboardData,
   DashboardDataState,
   LightRecord,
   Project,

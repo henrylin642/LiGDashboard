@@ -28,18 +28,38 @@ export function SceneStatsPage() {
     const stats = useMemo(() => {
         if (status !== "ready" || !data) return [];
 
+        // Pre-calculate CS map to avoid O(N*M)
+        const csBySceneId = new Map<number, typeof data.coordinateSystems>();
+        data.coordinateSystems.forEach(cs => {
+            const sid = cs.sceneId;
+            if (sid) {
+                const list = csBySceneId.get(sid) || [];
+                list.push(cs);
+                csBySceneId.set(sid, list);
+            }
+        });
+
+        // Optimize Click Counting: Iterate clicks once
+        const clickMap = new Map<number, number>();
+        // We need Obj -> Scene map.
+        const objToScene = new Map<number, number>();
+        data.arObjects.forEach(o => {
+            if (o.sceneId) objToScene.set(o.id, o.sceneId);
+        });
+
+        data.clicks.forEach(c => {
+            const sId = objToScene.get(c.objId);
+            if (sId) {
+                clickMap.set(sId, (clickMap.get(sId) || 0) + 1);
+            }
+        });
+
         // 1. Start with ALL scenes
-        const mappedStats: SceneStats[] = data.scenes.map(scene => {
+        return data.scenes.map((scene): SceneStats => {
             const sceneId = scene.id;
 
-            // Find linked Coordinate Systems
-            // Strategy: Look for CS that references this sceneId
-            // OR use the sceneToLightIds map if fallback is needed, but rely on CS first.
-            const linkedCS = data.coordinateSystems.filter(cs => cs.sceneId === sceneId);
-
-            // If no linked CS, do we use sceneToLightIds?
-            // Existing logic: "Unlinked Lights"
-            // Let's create a "Unlinked" group if sceneToLightIds has lights that are NOT in the linked CS
+            // Find linked Coordinate Systems (O(1) lookup)
+            const linkedCS = csBySceneId.get(sceneId) || [];
 
             // Collect all lights known to be in this scene from `sceneToLightIds`
             const knownLightsInScene = new Set(data.sceneToLightIds[sceneId] || []);
@@ -63,56 +83,14 @@ export function SceneStatsPage() {
                 });
             }
 
-            // Count Clicks
-            // Filter clicks for objects belonging to this scene.
-            // This might still imply we need arObjects loaded. 
-            // If data.arObjects is empty (lazy load), click count might be incomplete.
-            // But user said clicks are from CSV. `loadClicks` loads all clicks.
-            // But we need to map Click -> Obj -> Scene.
-            // DashboardData maps AR objects. If AR objects aren't loaded, we can't map clicks to scenes :(.
-            // Unless we have a map of ObjId -> SceneId separately?
-            // Currently `arObjects` is lazy loaded. 
-            // Compromise: Show 0 or "-" with a note if AR objects not loaded?
-            // But for now let's use what we have in `data.arObjects`.
-            let clicks = 0;
-            // Optimization: Pre-calculate this map in Context? Or here? 
-            // If arObjects list is huge, iterating it here is slow inside map.
-            // We'll optimize by assuming clicks are pre-aggregated or do it efficiently.
-            // Ideally `DashboardDataContext` should provide `clickCountByScene`.
-            // For now, let's filter lazily.
-
-            // We will do a separate pass for clicks to avoid O(N*M).
-
             return {
                 sceneId,
                 sceneName: scene.name,
                 coordinateSystems: csStats.sort((a, b) => a.name.localeCompare(b.name)),
                 totalLights: (data.sceneToLightIds[sceneId] || []).length,
-                clickCount: 0 // Will fill later
+                clickCount: clickMap.get(sceneId) || 0
             };
         });
-
-        // Optimize Click Counting: Iterate clicks once
-        const clickMap = new Map<number, number>();
-        // We need Obj -> Scene map.
-        const objToScene = new Map<number, number>();
-        data.arObjects.forEach(o => {
-            if (o.sceneId) objToScene.set(o.id, o.sceneId);
-        });
-
-        data.clicks.forEach(c => {
-            const sId = objToScene.get(c.objId);
-            if (sId) {
-                clickMap.set(sId, (clickMap.get(sId) || 0) + 1);
-            }
-        });
-
-        mappedStats.forEach(s => {
-            s.clickCount = clickMap.get(s.sceneId) || 0;
-        });
-
-        return mappedStats;
-
     }, [status, data]);
 
     const filteredStats = useMemo(() => {
