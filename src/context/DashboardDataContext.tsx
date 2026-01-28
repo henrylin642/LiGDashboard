@@ -269,7 +269,7 @@ async function loadProjects(): Promise<Project[]> {
           lightIds: (Array.isArray(item.lightIds) ? item.lightIds : [])
             .map((value) => {
               const num = parseNumber(value);
-              if (item.projectId === '27' || item.projectId === 27) {
+              if (item.projectId === '27') {
                 console.log(`[Debug Project 27] parsing lightId:`, value, typeof value, '->', num);
               }
               return num;
@@ -281,7 +281,7 @@ async function loadProjects(): Promise<Project[]> {
           ownerEmails: Array.isArray(item.ownerEmails) ? [...item.ownerEmails].sort() : [],
           lightConfigs,
         });
-        if (item.projectId === '27' || item.projectId === 27) {
+        if (item.projectId === '27') {
           console.log(`[Debug Project 27] Raw:`, item);
           console.log(`[Debug Project 27] Parsed LightIds:`, projects[projects.length - 1].lightIds);
         }
