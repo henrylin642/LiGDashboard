@@ -24,6 +24,7 @@ export function SceneStatsPage() {
 
         // Helper to get Scene Name by ID (from loaded AR objects)
         const sceneNames = new Map<number, string>();
+
         data.arObjects.forEach(obj => {
             if (obj.sceneId && obj.sceneName) {
                 sceneNames.set(obj.sceneId, obj.sceneName);
@@ -40,18 +41,28 @@ export function SceneStatsPage() {
 
             lightIds.forEach(lid => {
                 const light = data.lights.find(l => l.ligId === lid);
-                if (light && light.coordinateSystemId) {
-                    const csId = light.coordinateSystemId;
-                    if (!csMap.has(csId)) {
+                // Use -1 for lights without a coordinate system
+                const csId = light?.coordinateSystemId ?? -1;
+                const csName = light?.coordinateSystemName;
+
+                if (!csMap.has(csId)) {
+                    let name = "Unknown CS";
+                    if (csId === -1) {
+                        name = "Unlinked Lights (無座標系)";
+                    } else if (csName) {
+                        name = csName;
+                    } else {
                         const cs = data.coordinateSystems.find(c => c.id === csId);
-                        csMap.set(csId, {
-                            id: csId,
-                            name: cs ? cs.name : `Unknown CS #${csId}`,
-                            lightIds: []
-                        });
+                        name = cs ? cs.name : `CS #${csId}`;
                     }
-                    csMap.get(csId)!.lightIds.push(lid);
+
+                    csMap.set(csId, {
+                        id: csId,
+                        name,
+                        lightIds: []
+                    });
                 }
+                csMap.get(csId)!.lightIds.push(lid);
             });
 
             const coordinateSystems = Array.from(csMap.values()).sort((a, b) => a.name.localeCompare(b.name));

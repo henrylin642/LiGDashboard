@@ -364,7 +364,7 @@ export async function fetchArObjectsForLight(
 
     return data.flatMap((sceneItem: any) => {
       const sceneId = sceneItem.scene_id;
-      const sceneName = sceneItem.scene_name; // Assuming it might be there or in coordinate_system
+      const sceneName = sceneItem.scene_name ?? sceneItem.name; // Fallback to 'name' property
 
       if (!Array.isArray(sceneItem.ar_objects)) return [];
 
