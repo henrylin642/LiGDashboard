@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useDashboardData } from "../context/DashboardDataContext";
 
 // SceneStatsPage.tsx
@@ -11,114 +11,194 @@ interface SceneStats {
         lightIds: number[];
     }[];
     totalLights: number;
-    clickCount: number;
+    clickCount: number | null; // null means not loaded yet? No, click log is loaded. null means probably 0.
 }
+
+type SortField = 'sceneId' | 'sceneName' | 'clickCount';
+type SortOrder = 'asc' | 'desc';
 
 export function SceneStatsPage() {
     const { status, data } = useDashboardData();
+    const [searchTerm, setSearchTerm] = useState("");
+    const [sortField, setSortField] = useState<SortField>('sceneId');
+    const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
+    const [currentPage, setCurrentPage] = useState(1);
+    const pageSize = 50;
 
     const stats = useMemo(() => {
         if (status !== "ready" || !data) return [];
 
-        const sceneMap = new Map<number, SceneStats>();
+        // 1. Start with ALL scenes
+        const mappedStats: SceneStats[] = data.scenes.map(scene => {
+            const sceneId = scene.id;
 
-        // Helper to get Scene Name by ID (from loaded AR objects)
-        const sceneNames = new Map<number, string>();
+            // Find linked Coordinate Systems
+            // Strategy: Look for CS that references this sceneId
+            // OR use the sceneToLightIds map if fallback is needed, but rely on CS first.
+            const linkedCS = data.coordinateSystems.filter(cs => cs.sceneId === sceneId);
 
-        data.arObjects.forEach(obj => {
-            if (obj.sceneId && obj.sceneName) {
-                sceneNames.set(obj.sceneId, obj.sceneName);
-            }
-        });
+            // If no linked CS, do we use sceneToLightIds?
+            // Existing logic: "Unlinked Lights"
+            // Let's create a "Unlinked" group if sceneToLightIds has lights that are NOT in the linked CS
 
-        // 1. Iterate sceneToLightIds to build the base map
-        Object.entries(data.sceneToLightIds).forEach(([sIdStr, lightIds]) => {
-            const sceneId = Number(sIdStr);
-            const sceneName = sceneNames.get(sceneId) || `Scene #${sceneId}`;
+            // Collect all lights known to be in this scene from `sceneToLightIds`
+            const knownLightsInScene = new Set(data.sceneToLightIds[sceneId] || []);
 
-            // Determine Coordinate Systems for these lights
-            const csMap = new Map<number, { id: number; name: string; lightIds: number[] }>();
-
-            lightIds.forEach(lid => {
-                const light = data.lights.find(l => l.ligId === lid);
-                // Use -1 for lights without a coordinate system
-                const csId = light?.coordinateSystemId ?? -1;
-                const csName = light?.coordinateSystemName;
-
-                if (!csMap.has(csId)) {
-                    let name = "Unknown CS";
-                    if (csId === -1) {
-                        name = "Unlinked Lights (無座標系)";
-                    } else if (csName) {
-                        name = csName;
-                    } else {
-                        const cs = data.coordinateSystems.find(c => c.id === csId);
-                        name = cs ? cs.name : `CS #${csId}`;
-                    }
-
-                    csMap.set(csId, {
-                        id: csId,
-                        name,
-                        lightIds: []
-                    });
-                }
-                csMap.get(csId)!.lightIds.push(lid);
+            const csStats = linkedCS.map(cs => {
+                // Remove these lights from the "Unlinked Set"
+                cs.lightIds.forEach(id => knownLightsInScene.delete(id));
+                return {
+                    id: cs.id,
+                    name: cs.name,
+                    lightIds: cs.lightIds
+                };
             });
 
-            const coordinateSystems = Array.from(csMap.values()).sort((a, b) => a.name.localeCompare(b.name));
-            coordinateSystems.forEach(cs => cs.lightIds.sort((a, b) => a - b));
+            // Any remaining lights are unlinked
+            if (knownLightsInScene.size > 0) {
+                csStats.push({
+                    id: -1,
+                    name: "Unlinked Lights (無座標系)",
+                    lightIds: Array.from(knownLightsInScene).sort((a, b) => a - b)
+                });
+            }
 
-            sceneMap.set(sceneId, {
+            // Count Clicks
+            // Filter clicks for objects belonging to this scene.
+            // This might still imply we need arObjects loaded. 
+            // If data.arObjects is empty (lazy load), click count might be incomplete.
+            // But user said clicks are from CSV. `loadClicks` loads all clicks.
+            // But we need to map Click -> Obj -> Scene.
+            // DashboardData maps AR objects. If AR objects aren't loaded, we can't map clicks to scenes :(.
+            // Unless we have a map of ObjId -> SceneId separately?
+            // Currently `arObjects` is lazy loaded. 
+            // Compromise: Show 0 or "-" with a note if AR objects not loaded?
+            // But for now let's use what we have in `data.arObjects`.
+            let clicks = 0;
+            // Optimization: Pre-calculate this map in Context? Or here? 
+            // If arObjects list is huge, iterating it here is slow inside map.
+            // We'll optimize by assuming clicks are pre-aggregated or do it efficiently.
+            // Ideally `DashboardDataContext` should provide `clickCountByScene`.
+            // For now, let's filter lazily.
+
+            // We will do a separate pass for clicks to avoid O(N*M).
+
+            return {
                 sceneId,
-                sceneName,
-                coordinateSystems,
-                totalLights: lightIds.length,
-                clickCount: 0
-            });
+                sceneName: scene.name,
+                coordinateSystems: csStats.sort((a, b) => a.name.localeCompare(b.name)),
+                totalLights: (data.sceneToLightIds[sceneId] || []).length,
+                clickCount: 0 // Will fill later
+            };
         });
 
-        // 2. Count Clicks
-        data.clicks.forEach(click => {
-            const obj = data.arObjects.find(o => o.id === click.objId);
-            if (obj && obj.sceneId && sceneMap.has(obj.sceneId)) {
-                sceneMap.get(obj.sceneId)!.clickCount++;
+        // Optimize Click Counting: Iterate clicks once
+        const clickMap = new Map<number, number>();
+        // We need Obj -> Scene map.
+        const objToScene = new Map<number, number>();
+        data.arObjects.forEach(o => {
+            if (o.sceneId) objToScene.set(o.id, o.sceneId);
+        });
+
+        data.clicks.forEach(c => {
+            const sId = objToScene.get(c.objId);
+            if (sId) {
+                clickMap.set(sId, (clickMap.get(sId) || 0) + 1);
             }
         });
 
-        return Array.from(sceneMap.values()).sort((a, b) => {
-            // Sort by Scene Name, but "Scene #" at the end
-            if (a.sceneName.startsWith("Scene #") && !b.sceneName.startsWith("Scene #")) return 1;
-            if (!a.sceneName.startsWith("Scene #") && b.sceneName.startsWith("Scene #")) return -1;
-            return a.sceneName.localeCompare(b.sceneName);
+        mappedStats.forEach(s => {
+            s.clickCount = clickMap.get(s.sceneId) || 0;
         });
+
+        return mappedStats;
 
     }, [status, data]);
 
-    if (status === "loading") return <div>載入中...</div>;
-    if (!data) return <div>無資料</div>;
+    const filteredStats = useMemo(() => {
+        return stats.filter(s =>
+            s.sceneName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            String(s.sceneId).includes(searchTerm)
+        );
+    }, [stats, searchTerm]);
+
+    const sortedStats = useMemo(() => {
+        return [...filteredStats].sort((a, b) => {
+            let res = 0;
+            if (sortField === 'sceneId') res = a.sceneId - b.sceneId;
+            else if (sortField === 'sceneName') res = a.sceneName.localeCompare(b.sceneName);
+            else if (sortField === 'clickCount') res = (a.clickCount || 0) - (b.clickCount || 0);
+
+            return sortOrder === 'asc' ? res : -res;
+        });
+    }, [filteredStats, sortField, sortOrder]);
+
+    const paginatedStats = useMemo(() => {
+        const start = (currentPage - 1) * pageSize;
+        return sortedStats.slice(start, start + pageSize);
+    }, [sortedStats, currentPage]);
+
+    const handleSort = (field: SortField) => {
+        if (sortField === field) {
+            setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortField(field);
+            setSortOrder('desc'); // Default desc for new field? Usually asc, but for stats desc number is better.
+        }
+    };
+
+    if (status === "loading") return <div style={{ padding: "2rem" }}>載入中...</div>;
+    if (!data) return <div style={{ padding: "2rem" }}>無資料</div>;
+
+    const totalPages = Math.ceil(filteredStats.length / pageSize);
 
     return (
         <div className="panel panel--surface">
-            <h2 className="panel__title">Scene / Coordinate / LightID 關聯表</h2>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+                <h2 className="panel__title" style={{ marginBottom: 0 }}>Scene Analysis</h2>
+                <input
+                    type="text"
+                    placeholder="搜尋 Scene ID 或名稱..."
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                    style={{ padding: "0.5rem", borderRadius: "4px", border: "1px solid #ccc" }}
+                />
+            </div>
+
             <div className="table-container">
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
-                        <tr style={{ borderBottom: "2px solid #eee", textAlign: "left" }}>
-                            <th style={{ padding: "0.5rem" }}>Scene ID</th>
-                            <th style={{ padding: "0.5rem" }}>Scene Name</th>
+                        <tr style={{ borderBottom: "2px solid #eee", textAlign: "left", background: "#f9f9f9" }}>
+                            <th
+                                style={{ padding: "0.5rem", cursor: "pointer" }}
+                                onClick={() => handleSort('sceneId')}
+                            >
+                                Scene ID {sortField === 'sceneId' && (sortOrder === 'asc' ? '↑' : '↓')}
+                            </th>
+                            <th
+                                style={{ padding: "0.5rem", cursor: "pointer" }}
+                                onClick={() => handleSort('sceneName')}
+                            >
+                                Scene Name {sortField === 'sceneName' && (sortOrder === 'asc' ? '↑' : '↓')}
+                            </th>
                             <th style={{ padding: "0.5rem" }}>Coordinate Systems (ID + Name)</th>
                             <th style={{ padding: "0.5rem" }}>Light IDs</th>
-                            <th style={{ padding: "0.5rem" }}>Clicks</th>
+                            <th
+                                style={{ padding: "0.5rem", cursor: "pointer" }}
+                                onClick={() => handleSort('clickCount')}
+                            >
+                                Clicks {sortField === 'clickCount' && (sortOrder === 'asc' ? '↑' : '↓')}
+                            </th>
                         </tr>
                     </thead>
                     <tbody>
-                        {stats.map((row) => (
+                        {paginatedStats.map((row) => (
                             <tr key={row.sceneId} style={{ borderBottom: "1px solid #eee", verticalAlign: "top" }}>
                                 <td style={{ padding: "0.5rem", color: "#666" }}>{row.sceneId}</td>
                                 <td style={{ padding: "0.5rem", fontWeight: "bold" }}>{row.sceneName}</td>
                                 <td style={{ padding: "0.5rem" }}>
                                     {row.coordinateSystems.map(cs => (
-                                        <div key={cs.id} style={{ marginBottom: "0.5rem" }}>
+                                        <div key={cs.id} style={{ marginBottom: "0.5rem", whiteSpace: "nowrap" }}>
                                             {cs.name} <span style={{ color: "#888", fontSize: "0.9em" }}>(ID: {cs.id})</span>
                                         </div>
                                     ))}
@@ -128,7 +208,21 @@ export function SceneStatsPage() {
                                     {row.coordinateSystems.map(cs => (
                                         <div key={cs.id} style={{ marginBottom: "0.5rem", minHeight: "1.2em" }}>
                                             {cs.lightIds.length > 0 ? (
-                                                <span style={{ fontFamily: "monospace", background: "#f5f5f5", padding: "2px 5px", borderRadius: "4px" }}>
+                                                <span
+                                                    title={cs.lightIds.join(", ")}
+                                                    style={{
+                                                        fontFamily: "monospace",
+                                                        background: "#f5f5f5",
+                                                        padding: "2px 5px",
+                                                        borderRadius: "4px",
+                                                        display: "inline-block",
+                                                        maxWidth: "200px",
+                                                        overflow: "hidden",
+                                                        textOverflow: "ellipsis",
+                                                        whiteSpace: "nowrap",
+                                                        cursor: "help"
+                                                    }}
+                                                >
                                                     {cs.lightIds.join(", ")}
                                                 </span>
                                             ) : (
@@ -139,22 +233,42 @@ export function SceneStatsPage() {
                                     {row.coordinateSystems.length === 0 && <span style={{ color: "#ccc" }}>-</span>}
                                 </td>
                                 <td style={{ padding: "0.5rem" }}>
-                                    {row.clickCount > 0 ? row.clickCount.toLocaleString() : "-"}
+                                    {row.clickCount !== 0 ? row.clickCount?.toLocaleString() : <span style={{ color: "#ccc" }}>-</span>}
                                 </td>
                             </tr>
                         ))}
                         {stats.length === 0 && (
                             <tr>
                                 <td colSpan={5} style={{ padding: "1rem", textAlign: "center", color: "#888" }}>
-                                    尚無 Scene 資料。請確認已載入相關專案的 LightID 資料。
+                                    尚無 Scene 資料。
                                 </td>
                             </tr>
                         )}
                     </tbody>
                 </table>
             </div>
-            <p style={{ marginTop: "1rem", color: "#666", fontSize: "0.9em" }}>
-                註：此表基於已載入的 AR 物件與 LightID 反向建立關聯。若某些 Scene 無 AR 物件或尚未載入，則不會顯示。
+
+            {/* Pagination */}
+            <div style={{ marginTop: "1rem", display: "flex", justifyContent: "center", gap: "0.5rem" }}>
+                <button
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    style={{ padding: "0.5rem 1rem", cursor: currentPage === 1 ? "not-allowed" : "pointer" }}
+                >
+                    Previous
+                </button>
+                <span style={{ padding: "0.5rem" }}>Page {currentPage} of {totalPages || 1}</span>
+                <button
+                    disabled={currentPage >= totalPages}
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    style={{ padding: "0.5rem 1rem", cursor: currentPage >= totalPages ? "not-allowed" : "pointer" }}
+                >
+                    Next
+                </button>
+            </div>
+
+            <p style={{ marginTop: "1rem", color: "#666", fontSize: "0.8em" }}>
+                註：Clicks 資料來自歷史點擊紀錄 (obj_click_log.csv)，需等待 AR 物件對應表載入完成後才能正確統計。
             </p>
         </div>
     );

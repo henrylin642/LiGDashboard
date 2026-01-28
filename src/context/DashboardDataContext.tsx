@@ -1,3 +1,4 @@
+
 import {
   createContext,
   useContext,
@@ -12,7 +13,9 @@ import {
 } from "../utils/csv";
 import {
   fetchLights,
-  fetchCoordinateSystemsWithMeta
+  fetchCoordinateSystemsWithMeta,
+  fetchArObjectsForLight,
+  fetchScenesWithMeta,
 } from "../services/ligApi";
 import { fetchProjects as fetchAirtableProjects } from "../services/airtable";
 import type {
@@ -26,6 +29,7 @@ import type {
   ScanCoordinateRecord,
   ScanRecord,
   LightConfig,
+  SceneRecord,
 } from "../types";
 
 const DashboardDataContext = createContext<DashboardDataState>({
@@ -70,6 +74,7 @@ export function DashboardDataProvider({
           coordinateSystems,
           clicks,
           scanCoordinates,
+          scenes
         ] = await Promise.all([
           loadProjects(),
           loadScans(),
@@ -77,6 +82,7 @@ export function DashboardDataProvider({
           loadCoordinateSystems(ligToken),
           loadClicks(),
           loadScanCoordinates(),
+          fetchScenesWithMeta(ligToken)
         ]);
 
         const allLightIds = new Set<number>();
@@ -102,23 +108,56 @@ export function DashboardDataProvider({
           }
         }
 
+        // Map scenes to records and build map
+        const loadedScenes: SceneRecord[] = scenes.map(s => ({
+          id: Number(s.id),
+          name: s.name,
+          projectId: Number(s.raw && (s.raw as any).project_id) || null,
+          createdAt: s.createdAt ? new Date(s.createdAt) : null,
+          updatedAt: s.updatedAt ? new Date(s.updatedAt) : null,
+        }));
+
+        const sceneById: Record<number, SceneRecord> = {};
+        loadedScenes.forEach(s => {
+          sceneById[s.id] = s;
+        });
+
+        const sceneToLightIds: Record<number, number[]> = {};
+        // Populate sceneToLightIds from Coordinate Systems first (reverse mapping)
+        coordinateSystems.forEach(cs => {
+          if (cs.sceneId && cs.lightIds) {
+            const sId = Number(cs.sceneId);
+            if (!sceneToLightIds[sId]) sceneToLightIds[sId] = [];
+            cs.lightIds.forEach(id => sceneToLightIds[sId].push(id));
+          }
+        });
+
+        // Dedup sceneToLightIds
+        Object.keys(sceneToLightIds).forEach(key => {
+          const k = Number(key);
+          sceneToLightIds[k] = Array.from(new Set(sceneToLightIds[k]));
+        });
+
         const firstClickByUser = buildFirstClickByUser(clicks);
 
-        const data: DashboardData = {
-          projects,
-          scans,
-          lights,
-          coordinateSystems,
-          clicks,
-          arObjects,
-          scanCoordinates,
-          projectById,
-          lightToProjectIds,
-          firstClickByUser,
-          sceneToLightIds: {},
-        };
-
-        setState({ status: "ready", data });
+        setState({
+          status: "ready",
+          data: {
+            projects,
+            scans,
+            lights,
+            coordinateSystems,
+            arObjects,
+            clicks,
+            scanCoordinates,
+            projectById,
+            lightToProjectIds,
+            sceneToLightIds,
+            scenes: loadedScenes,
+            sceneById,
+            firstClickByUser,
+          },
+        });
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Unknown data loading error";
@@ -275,7 +314,7 @@ async function loadProjects(): Promise<Project[]> {
         }
         projects.push({
           projectId: parsedId,
-          name: item.projectName.trim() || `Project ${parsedId}`,
+          name: item.projectName.trim() || `Project ${parsedId} `,
           startDate,
           endDate,
           coordinates: Array.isArray(item.coordinates) ? item.coordinates : [],
@@ -345,12 +384,14 @@ async function loadCoordinateSystems(token?: string): Promise<CoordinateSystemRe
     return {
       id,
       name: s.name,
-      sceneId: null, // API doesn't return bound scene ID directly in this endpoint usually, or it needs mapping
-      sceneName: null,
+      sceneId: s.sceneId ?? null,
+      sceneName: s.sceneName ?? null,
+      lightIds: s.lightIds ?? [],
       createdAt: null,
       updatedAt: null
     } as CoordinateSystemRecord;
-  }).filter(Boolean) as CoordinateSystemRecord[];
+  })
+    .filter(Boolean) as CoordinateSystemRecord[];
 }
 
 async function loadClicks(): Promise<ClickRecord[]> {

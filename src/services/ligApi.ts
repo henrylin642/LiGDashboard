@@ -57,6 +57,9 @@ export interface CoordinateSystemDetail {
   id: string;
   name: string;
   projectId?: string | number | null;
+  sceneId?: number | null;
+  sceneName?: string | null;
+  lightIds?: number[];
   raw?: unknown;
 }
 
@@ -531,6 +534,9 @@ export async function fetchCoordinateSystemsWithMeta(
         id,
         name,
         projectId: item.project_id ?? item.projectId ?? null,
+        sceneId: Number(item.scene_id) || null,
+        sceneName: String(item.scene_name ?? "").trim() || null,
+        lightIds: Array.isArray(item.lights) ? item.lights.map((l: any) => Number(l.id || l.light_id || l)) : [],
         raw: item,
       } as CoordinateSystemDetail;
     })

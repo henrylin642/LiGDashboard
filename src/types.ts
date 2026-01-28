@@ -34,6 +34,7 @@ export interface CoordinateSystemRecord {
   name: string;
   sceneId: number | null;
   sceneName: string | null;
+  lightIds: number[];
   createdAt: Date | null;
   updatedAt: Date | null;
 }
@@ -62,6 +63,15 @@ export interface ScanCoordinateRecord {
   createdAt: Date | null;
 }
 
+// Basic Scene Record structure
+export interface SceneRecord {
+  id: number;
+  name: string;
+  projectId?: number | null; // unlikely, but maybe
+  createdAt?: Date | null;
+  updatedAt?: Date | null;
+}
+
 export interface DashboardData {
   projects: Project[];
   scans: ScanRecord[];
@@ -75,6 +85,8 @@ export interface DashboardData {
   firstClickByUser: Record<string, Date>;
   // Map Scene ID -> Set of Light IDs (which implies Coordinate System)
   sceneToLightIds: Record<number, number[]>;
+  scenes: SceneRecord[];
+  sceneById: Record<number, SceneRecord>;
 }
 
 export interface DashboardDataState {
