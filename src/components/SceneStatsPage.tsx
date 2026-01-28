@@ -1,7 +1,9 @@
 import { useMemo } from "react";
 import { useDashboardData } from "../context/DashboardDataContext";
 
+// SceneStatsPage.tsx
 interface SceneStats {
+    sceneId: number;
     sceneName: string;
     coordinateSystems: {
         id: number;
@@ -9,7 +11,7 @@ interface SceneStats {
         lightIds: number[];
     }[];
     totalLights: number;
-    clickCount: number; // Placeholder for now, hard to calculate without full object linking
+    clickCount: number;
 }
 
 export function SceneStatsPage() {
@@ -18,91 +20,66 @@ export function SceneStatsPage() {
     const stats = useMemo(() => {
         if (status !== "ready" || !data) return [];
 
-        const sceneMap = new Map<string, SceneStats>();
+        const sceneMap = new Map<number, SceneStats>();
 
-        // 1. Group Coordinate Systems by Scene
-        // Note: Some coordinate systems might not have a scene name?
-        const csByScene = new Map<string, typeof data.coordinateSystems>();
-
-        data.coordinateSystems.forEach(cs => {
-            const sceneName = cs.sceneName || "Unknown Scene";
-            if (!csByScene.has(sceneName)) {
-                csByScene.set(sceneName, []);
-            }
-            csByScene.get(sceneName)?.push(cs);
-        });
-
-        // 2. Map Lights to Coordinate Systems
-        const lightsByCs = new Map<number, number[]>();
-        data.lights.forEach(l => {
-            if (l.coordinateSystemId) {
-                if (!lightsByCs.has(l.coordinateSystemId)) {
-                    lightsByCs.set(l.coordinateSystemId, []);
-                }
-                lightsByCs.get(l.coordinateSystemId)?.push(l.ligId);
-            }
-        });
-
-        // 3. Build Stats
-        csByScene.forEach((css, sceneName) => {
-            const coordinateSystems = css.map(cs => {
-                const lightIds = lightsByCs.get(cs.id) || [];
-                return {
-                    id: cs.id,
-                    name: cs.name,
-                    lightIds: lightIds.sort((a, b) => a - b)
-                };
-            });
-
-            const totalLights = coordinateSystems.reduce((sum, cs) => sum + cs.lightIds.length, 0);
-
-            // Clicks aggregation (if possible)
-            // Currently clicks link to objId. We need objId -> sceneId mapping.
-            // ArObjects are lazy loaded, so we might not have all of them.
-            // We can try to use what we have.
-            // Count relevant clicks
-            // This is global, can be optimized
-
-            // Iterate all clicks, check if their objId exists in data.arObjects
-            // and if that arbObject has this sceneName.
-            // This is efficient enough for small datasets.
-
-            // Build objId -> sceneName map from available arObjects
-            const objToScene = new Map<number, string>();
-            data.arObjects.forEach(obj => {
-                if (obj.sceneName) objToScene.set(obj.id, obj.sceneName);
-            });
-
-            // Count relevant clicks
-            // This is global, can be optimized
-
-            sceneMap.set(sceneName, {
-                sceneName,
-                coordinateSystems: coordinateSystems.sort((a, b) => a.name.localeCompare(b.name)),
-                totalLights,
-                clickCount: 0 // Will populate in a separate pass if needed, or efficiently below?
-            });
-        });
-
-        // Populate click counts efficiently
-        const objToScene = new Map<number, string>();
+        // Helper to get Scene Name by ID (from loaded AR objects)
+        const sceneNames = new Map<number, string>();
         data.arObjects.forEach(obj => {
-            if (obj.sceneName) objToScene.set(obj.id, obj.sceneName);
-        });
-
-        data.clicks.forEach(click => {
-            const sName = objToScene.get(click.objId);
-            if (sName && sceneMap.has(sName)) {
-                const s = sceneMap.get(sName)!;
-                s.clickCount++;
-            } else if (!sName) {
-                // Click on unknown object or object not loaded
-                // Maybe add to "Unknown" scene?
-                // For now, ignore.
+            if (obj.sceneId && obj.sceneName) {
+                sceneNames.set(obj.sceneId, obj.sceneName);
             }
         });
 
-        return Array.from(sceneMap.values()).sort((a, b) => b.totalLights - a.totalLights);
+        // 1. Iterate sceneToLightIds to build the base map
+        Object.entries(data.sceneToLightIds).forEach(([sIdStr, lightIds]) => {
+            const sceneId = Number(sIdStr);
+            const sceneName = sceneNames.get(sceneId) || `Scene #${sceneId}`;
+
+            // Determine Coordinate Systems for these lights
+            const csMap = new Map<number, { id: number; name: string; lightIds: number[] }>();
+
+            lightIds.forEach(lid => {
+                const light = data.lights.find(l => l.ligId === lid);
+                if (light && light.coordinateSystemId) {
+                    const csId = light.coordinateSystemId;
+                    if (!csMap.has(csId)) {
+                        const cs = data.coordinateSystems.find(c => c.id === csId);
+                        csMap.set(csId, {
+                            id: csId,
+                            name: cs ? cs.name : `Unknown CS #${csId}`,
+                            lightIds: []
+                        });
+                    }
+                    csMap.get(csId)!.lightIds.push(lid);
+                }
+            });
+
+            const coordinateSystems = Array.from(csMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+            coordinateSystems.forEach(cs => cs.lightIds.sort((a, b) => a - b));
+
+            sceneMap.set(sceneId, {
+                sceneId,
+                sceneName,
+                coordinateSystems,
+                totalLights: lightIds.length,
+                clickCount: 0
+            });
+        });
+
+        // 2. Count Clicks
+        data.clicks.forEach(click => {
+            const obj = data.arObjects.find(o => o.id === click.objId);
+            if (obj && obj.sceneId && sceneMap.has(obj.sceneId)) {
+                sceneMap.get(obj.sceneId)!.clickCount++;
+            }
+        });
+
+        return Array.from(sceneMap.values()).sort((a, b) => {
+            // Sort by Scene Name, but "Scene #" at the end
+            if (a.sceneName.startsWith("Scene #") && !b.sceneName.startsWith("Scene #")) return 1;
+            if (!a.sceneName.startsWith("Scene #") && b.sceneName.startsWith("Scene #")) return -1;
+            return a.sceneName.localeCompare(b.sceneName);
+        });
 
     }, [status, data]);
 
@@ -116,28 +93,31 @@ export function SceneStatsPage() {
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
                         <tr style={{ borderBottom: "2px solid #eee", textAlign: "left" }}>
+                            <th style={{ padding: "0.5rem" }}>Scene ID</th>
                             <th style={{ padding: "0.5rem" }}>Scene Name</th>
-                            <th style={{ padding: "0.5rem" }}>Coordinate Systems</th>
+                            <th style={{ padding: "0.5rem" }}>Coordinate Systems (ID + Name)</th>
                             <th style={{ padding: "0.5rem" }}>Light IDs</th>
-                            <th style={{ padding: "0.5rem" }}>Clicks (Loaded Objects)</th>
+                            <th style={{ padding: "0.5rem" }}>Clicks</th>
                         </tr>
                     </thead>
                     <tbody>
                         {stats.map((row) => (
-                            <tr key={row.sceneName} style={{ borderBottom: "1px solid #eee", verticalAlign: "top" }}>
+                            <tr key={row.sceneId} style={{ borderBottom: "1px solid #eee", verticalAlign: "top" }}>
+                                <td style={{ padding: "0.5rem", color: "#666" }}>{row.sceneId}</td>
                                 <td style={{ padding: "0.5rem", fontWeight: "bold" }}>{row.sceneName}</td>
                                 <td style={{ padding: "0.5rem" }}>
                                     {row.coordinateSystems.map(cs => (
                                         <div key={cs.id} style={{ marginBottom: "0.5rem" }}>
-                                            {cs.name} <span style={{ color: "#888", fontSize: "0.8em" }}>(ID: {cs.id})</span>
+                                            {cs.name} <span style={{ color: "#888", fontSize: "0.9em" }}>(ID: {cs.id})</span>
                                         </div>
                                     ))}
+                                    {row.coordinateSystems.length === 0 && <span style={{ color: "#ccc" }}>-</span>}
                                 </td>
                                 <td style={{ padding: "0.5rem" }}>
                                     {row.coordinateSystems.map(cs => (
                                         <div key={cs.id} style={{ marginBottom: "0.5rem", minHeight: "1.2em" }}>
                                             {cs.lightIds.length > 0 ? (
-                                                <span style={{ fontFamily: "monospace", background: "#eee", padding: "2px 4px", borderRadius: "4px" }}>
+                                                <span style={{ fontFamily: "monospace", background: "#f5f5f5", padding: "2px 5px", borderRadius: "4px" }}>
                                                     {cs.lightIds.join(", ")}
                                                 </span>
                                             ) : (
@@ -145,19 +125,25 @@ export function SceneStatsPage() {
                                             )}
                                         </div>
                                     ))}
+                                    {row.coordinateSystems.length === 0 && <span style={{ color: "#ccc" }}>-</span>}
                                 </td>
                                 <td style={{ padding: "0.5rem" }}>
                                     {row.clickCount > 0 ? row.clickCount.toLocaleString() : "-"}
                                 </td>
                             </tr>
                         ))}
+                        {stats.length === 0 && (
+                            <tr>
+                                <td colSpan={5} style={{ padding: "1rem", textAlign: "center", color: "#888" }}>
+                                    尚無 Scene 資料。請確認已載入相關專案的 LightID 資料。
+                                </td>
+                            </tr>
+                        )}
                     </tbody>
                 </table>
             </div>
             <p style={{ marginTop: "1rem", color: "#666", fontSize: "0.9em" }}>
-                註：Clicks 統計僅包含已載入 AR 物件的點擊記錄。若需完整統計，請確保相關 LightID 的物件已載入。
-                <br />
-                目前 "Unknown Scene" 可能包含尚未綁定 Scene 的 Coordinate Systems。
+                註：此表基於已載入的 AR 物件與 LightID 反向建立關聯。若某些 Scene 無 AR 物件或尚未載入，則不會顯示。
             </p>
         </div>
     );

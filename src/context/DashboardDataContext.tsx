@@ -11,7 +11,6 @@ import {
   parseNumber,
 } from "../utils/csv";
 import {
-  fetchArObjectsWithMeta,
   fetchLights,
   fetchCoordinateSystemsWithMeta
 } from "../services/ligApi";
@@ -116,6 +115,7 @@ export function DashboardDataProvider({
           projectById,
           lightToProjectIds,
           firstClickByUser,
+          sceneToLightIds: {},
         };
 
         setState({ status: "ready", data });
@@ -164,7 +164,7 @@ export function DashboardDataProvider({
     });
 
     try {
-      const newArObjects = await loadArObjects(ligToken, newIds);
+      const { arObjects: newArObjects, sceneToLightIds: newSceneToLightIds } = await loadArObjects(ligToken, newIds);
 
       setState(prev => {
         if (prev.status !== "ready" || !prev.data) return prev;
@@ -175,11 +175,24 @@ export function DashboardDataProvider({
 
         if (uniqueNewObjects.length === 0) return prev;
 
+        // Merge scene to light IDs
+        const nextSceneToLightIds = { ...prev.data.sceneToLightIds };
+        Object.entries(newSceneToLightIds).forEach(([sceneId, lightIds]) => {
+          const sId = Number(sceneId);
+          if (!nextSceneToLightIds[sId]) {
+            nextSceneToLightIds[sId] = [];
+          }
+          // Merge and dedup
+          const merged = new Set([...nextSceneToLightIds[sId], ...lightIds]);
+          nextSceneToLightIds[sId] = Array.from(merged);
+        });
+
         return {
           ...prev,
           data: {
             ...prev.data,
-            arObjects: [...prev.data.arObjects, ...uniqueNewObjects]
+            arObjects: [...prev.data.arObjects, ...uniqueNewObjects],
+            sceneToLightIds: nextSceneToLightIds
           }
         };
       });
@@ -369,31 +382,64 @@ function buildFirstClickByUser(clicks: ClickRecord[]): Record<string, Date> {
 async function loadArObjects(
   token?: string,
   lightIds: number[] = []
-): Promise<ArObjectRecord[]> {
+): Promise<{ arObjects: ArObjectRecord[]; sceneToLightIds: Record<number, number[]> }> {
   if (token) {
     try {
-      const list = await fetchArObjectsWithMeta(token, lightIds);
-      if (list.length > 0) {
-        return list.map((item) => {
-          const idNum = Number(item.id);
-          if (!Number.isFinite(idNum)) return null;
-          return {
-            id: idNum,
-            name: item.name,
-            sceneId: item.sceneId,
-            sceneName: item.sceneName,
-            locationX: item.location?.x ?? null,
-            locationY: item.location?.y ?? null,
-            locationZ: item.location?.z ?? null,
-          } as ArObjectRecord;
-        }).filter(Boolean) as ArObjectRecord[];
+      // We manually fetch from `fetchArObjectsWithMeta` but need to modify it or 
+      // use `fetchArObjectsForLight` directly to capture light ID association.
+      // Since `fetchArObjectsWithMeta` flattens everything, we can't easily attribute back to light ID.
+      // So we implement a custom fetch loop similar to `fetchArObjectsWithMeta` here.
+
+      const uniqueIds = Array.from(new Set(lightIds));
+      const BATCH_SIZE = 5;
+      const allArObjects: ArObjectRecord[] = [];
+      const sceneToLightIds: Record<number, number[]> = {};
+
+      const { fetchArObjectsForLight } = await import("../services/ligApi");
+
+      for (let i = 0; i < uniqueIds.length; i += BATCH_SIZE) {
+        const batch = uniqueIds.slice(i, i + BATCH_SIZE);
+        await Promise.all(batch.map(async (lightId) => {
+          try {
+            // We use fetchArObjectsForLight but we need to know the SCENES it found.
+            // Re-implementing logic to capture scenes is cleaner.
+            // Or we assume `fetchArObjectsForLight` returns objects with `sceneId`.
+            // And we map `sceneId` -> `lightId`.
+            // Map found scenes to this light ID
+            const objects = await fetchArObjectsForLight(lightId, token);
+            const mappedObjects: ArObjectRecord[] = objects.map(item => ({
+              id: Number(item.id),
+              name: item.name,
+              sceneId: item.sceneId,
+              sceneName: item.sceneName,
+              locationX: item.location?.x ?? null,
+              locationY: item.location?.y ?? null,
+              locationZ: item.location?.z ?? null,
+            }));
+            allArObjects.push(...mappedObjects);
+
+            // Map found scenes to this light ID
+            const foundSceneIds = new Set(objects.map(o => o.sceneId).filter((id): id is number => id !== null));
+            foundSceneIds.forEach(sid => {
+              if (!sceneToLightIds[sid]) sceneToLightIds[sid] = [];
+              if (!sceneToLightIds[sid].includes(lightId)) {
+                sceneToLightIds[sid].push(lightId);
+              }
+            });
+          } catch (e) {
+            console.warn(`Failed to load for light ${lightId}`, e);
+          }
+        }));
       }
+
+      return { arObjects: allArObjects, sceneToLightIds };
+
     } catch (error) {
       console.warn("[DashboardData] 無法從 API 載入 AR objects", error);
     }
   }
 
-  return [];
+  return { arObjects: [], sceneToLightIds: {} };
 }
 
 async function loadScanCoordinates(): Promise<ScanCoordinateRecord[]> {

@@ -73,6 +73,8 @@ export interface DashboardData {
   lightToProjectIds: Record<number, number[]>;
   projectById: Record<number, Project>;
   firstClickByUser: Record<string, Date>;
+  // Map Scene ID -> Set of Light IDs (which implies Coordinate System)
+  sceneToLightIds: Record<number, number[]>;
 }
 
 export interface DashboardDataState {
