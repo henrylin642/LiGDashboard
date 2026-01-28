@@ -47,7 +47,8 @@ export function fetchCsv<T>(
 
 export function parseNumber(value: string | undefined): number | null {
   if (!value && value !== "0") return null;
-  const cleaned = value.replace(/,/g, "").trim();
+  // Remove commas, quotes, brackets
+  const cleaned = value.replace(/[,\[\]"']/g, "").trim();
   if (cleaned === "") return null;
   const num = Number(cleaned);
   return Number.isFinite(num) ? num : null;
