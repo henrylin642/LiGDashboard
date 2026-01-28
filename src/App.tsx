@@ -1001,6 +1001,14 @@ function App() {
             </button>
             <button
               type="button"
+              className={`app__nav-button${page === "sceneStats" ? " app__nav-button--active" : ""
+                }`}
+              onClick={() => setPage("sceneStats")}
+            >
+              Scene 分析
+            </button>
+            <button
+              type="button"
               className={`app__nav-button${page === "wall" ? " app__nav-button--active" : ""
                 }`}
               onClick={() => setPage("wall")}
