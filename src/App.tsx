@@ -4288,15 +4288,14 @@ function SettingsPage({
     return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
   }, [ownerOptions, customOwnerEmails, formState.ownerEmails]);
 
-  const airtableConfigured =
-    Boolean(import.meta.env.VITE_AIRTABLE_PAT) &&
-    Boolean(import.meta.env.VITE_AIRTABLE_BASE_ID) &&
-    Boolean(import.meta.env.VITE_AIRTABLE_EVENTS_TABLE);
+  const supabaseConfigured =
+    Boolean(import.meta.env.VITE_SUPABASE_URL) &&
+    Boolean(import.meta.env.VITE_SUPABASE_ANON_KEY);
 
   useEffect(() => {
-    if (!airtableConfigured) return;
+    if (!supabaseConfigured) return;
     void loadProjects();
-  }, [airtableConfigured]);
+  }, [supabaseConfigured]);
 
   useEffect(() => {
     setTokenInput(ligToken);
@@ -4956,14 +4955,13 @@ function SettingsPage({
       </div>
 
       <div className="panel panel--surface">
-        <h3 className="panel__title">Projects (Airtable)</h3>
-        {!airtableConfigured && (
+        <h3 className="panel__title">Projects (Supabase)</h3>
+        {!supabaseConfigured && (
           <p>
-            請先在 <code>.env.local</code> 設定 Airtable 相關參數（PAT / Base
-            ID / Table），才能啟用專案管理。
+            請先在 <code>.env.local</code> 設定 Supabase 相關參數（URL / Anon Key），才能啟用專案管理。
           </p>
         )}
-        {airtableConfigured && (
+        {supabaseConfigured && (
           <>
             <form className="event-form" onSubmit={handleSubmit}>
               <div className="form-grid">

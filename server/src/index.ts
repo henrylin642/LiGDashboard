@@ -3,7 +3,7 @@ dotenv.config();
 
 import express from 'express';
 import cors from 'cors';
-import airtableRoutes from './routes/airtable';
+import projectsRoutes from './routes/projects';
 import ligRoutes from './routes/lig';
 import driveRoutes from './routes/drive';
 
@@ -14,7 +14,7 @@ app.use(cors());
 app.use(express.json());
 
 // Routes
-app.use('/api/projects', airtableRoutes);
+app.use('/api/projects', projectsRoutes);
 app.use('/api/lig', ligRoutes);
 app.use('/api/data', driveRoutes);
 
