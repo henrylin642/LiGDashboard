@@ -15,7 +15,9 @@ import {
   fetchLights,
   fetchCoordinateSystemsWithMeta,
   fetchScenesWithMeta,
+  loginLigDashboard,
 } from "../services/ligApi";
+import { fetchClients } from "../services/clientsApi";
 import { fetchProjects as fetchAirtableProjects } from "../services/airtable";
 import type {
   ArObjectRecord,
@@ -501,10 +503,58 @@ async function loadAggregatedScenesAndCoords(baseToken: string) {
     console.warn("Failed to fetch cached scenes, falling back to base token", e);
   }
 
-  // Fallback to single baseToken
-  const [coordinateSystems, scenesMeta] = await Promise.all([
-    loadCoordinateSystems(baseToken),
-    fetchScenesWithMeta(baseToken)
-  ]);
-  return { coordinateSystems, scenesMeta };
+  let clients: any[] = [];
+  try {
+    clients = await fetchClients();
+  } catch (e) {
+    console.warn("Failed to fetch clients for fallback aggregation", e);
+  }
+
+  if (clients.length === 0) {
+    // Fallback to single baseToken
+    const [coordinateSystems, scenesMeta] = await Promise.all([
+      loadCoordinateSystems(baseToken),
+      fetchScenesWithMeta(baseToken)
+    ]);
+    return { coordinateSystems, scenesMeta };
+  }
+
+  // Aggregate across clients (Slow fallback)
+  console.log("Cache missing or unavailable. Falling back to slow multi-client aggregation...");
+  const allCoordinateSystems: CoordinateSystemRecord[] = [];
+  const allScenesMeta: any[] = [];
+
+  const BATCH_SIZE = 2; // Keep it small to avoid rate limits
+  for (let i = 0; i < clients.length; i += BATCH_SIZE) {
+    const batch = clients.slice(i, i + BATCH_SIZE);
+
+    await Promise.all(batch.map(async (client) => {
+      try {
+        if (!client.email || !client.password) return;
+        const token = await loginLigDashboard(client.email, client.password);
+        if (!token) return;
+
+        const [coords, scenes] = await Promise.all([
+          loadCoordinateSystems(token),
+          fetchScenesWithMeta(token)
+        ]);
+        allCoordinateSystems.push(...coords);
+        allScenesMeta.push(...scenes);
+      } catch (e) {
+        console.warn(`Failed to aggregate for client ${client.email}`, e);
+      }
+    }));
+  }
+
+  // Dedup coordinate systems and scenes
+  const uniqueCoordsMap = new Map();
+  allCoordinateSystems.forEach(c => uniqueCoordsMap.set(c.id, c));
+
+  const uniqueScenesMap = new Map();
+  allScenesMeta.forEach(s => uniqueScenesMap.set(s.id, s));
+
+  return {
+    coordinateSystems: Array.from(uniqueCoordsMap.values()),
+    scenesMeta: Array.from(uniqueScenesMap.values() as IterableIterator<any>)
+  };
 }
