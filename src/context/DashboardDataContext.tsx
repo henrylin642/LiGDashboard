@@ -15,8 +15,10 @@ import {
   fetchLights,
   fetchCoordinateSystemsWithMeta,
   fetchScenesWithMeta,
+  loginLigDashboard,
 } from "../services/ligApi";
 import { fetchProjects as fetchAirtableProjects } from "../services/airtable";
+import { fetchClients } from "../services/clientsApi";
 import type {
   ArObjectRecord,
   ClickRecord,
@@ -65,22 +67,21 @@ export function DashboardDataProvider({
     async function load() {
       try {
         setState({ status: "loading" });
+        // Load aggregated scenes and coordinate systems
+        const { coordinateSystems, scenesMeta: scenes } = await loadAggregatedScenesAndCoords(ligToken);
+
         const [
           projects,
           scans,
           lights,
-          coordinateSystems,
           clicks,
           scanCoordinates,
-          scenes
         ] = await Promise.all([
           loadProjects(),
           loadScans(),
           loadLights(ligToken),
-          loadCoordinateSystems(ligToken),
           loadClicks(),
           loadScanCoordinates(),
-          fetchScenesWithMeta(ligToken)
         ]);
 
         const allLightIds = new Set<number>();
@@ -126,7 +127,7 @@ export function DashboardDataProvider({
           if (cs.sceneId && cs.lightIds) {
             const sId = Number(cs.sceneId);
             if (!sceneToLightIds[sId]) sceneToLightIds[sId] = [];
-            cs.lightIds.forEach(id => sceneToLightIds[sId].push(id));
+            cs.lightIds.forEach((id: number) => sceneToLightIds[sId].push(id));
           }
         });
 
@@ -484,4 +485,61 @@ async function loadArObjects(
 async function loadScanCoordinates(): Promise<ScanCoordinateRecord[]> {
   // No API available for scan coordinates yet
   return [];
+}
+
+async function loadAggregatedScenesAndCoords(baseToken: string) {
+  let clients: any[] = [];
+  try {
+    clients = await fetchClients();
+  } catch (e) {
+    console.warn("Failed to fetch clients for aggregation, falling back to base token", e);
+  }
+
+  if (clients.length === 0) {
+    // Fallback exactly as before
+    const [coordinateSystems, scenesMeta] = await Promise.all([
+      loadCoordinateSystems(baseToken),
+      fetchScenesWithMeta(baseToken)
+    ]);
+    return { coordinateSystems, scenesMeta };
+  }
+
+  // Aggregate across clients
+  const allCoordinateSystems: CoordinateSystemRecord[] = [];
+  const allScenesMeta: any[] = [];
+
+  // To avoid spamming LiG API and getting rate limited, batch the requests
+  const BATCH_SIZE = 2; // Keep it small to avoid rate limits
+  for (let i = 0; i < clients.length; i += BATCH_SIZE) {
+    const batch = clients.slice(i, i + BATCH_SIZE);
+
+    await Promise.all(batch.map(async (client) => {
+      try {
+        if (!client.email || !client.password) return;
+        const token = await loginLigDashboard(client.email, client.password);
+        if (!token) return;
+
+        const [coords, scenes] = await Promise.all([
+          loadCoordinateSystems(token),
+          fetchScenesWithMeta(token)
+        ]);
+        allCoordinateSystems.push(...coords);
+        allScenesMeta.push(...scenes);
+      } catch (e) {
+        console.warn(`Failed to aggregate for client ${client.email}`, e);
+      }
+    }));
+  }
+
+  // Dedup coordinate systems and scenes just in case multiple clients see the same ones
+  const uniqueCoordsMap = new Map();
+  allCoordinateSystems.forEach(c => uniqueCoordsMap.set(c.id, c));
+
+  const uniqueScenesMap = new Map();
+  allScenesMeta.forEach(s => uniqueScenesMap.set(s.id, s));
+
+  return {
+    coordinateSystems: Array.from(uniqueCoordsMap.values()),
+    scenesMeta: Array.from(uniqueScenesMap.values() as IterableIterator<any>)
+  };
 }

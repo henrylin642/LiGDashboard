@@ -6,6 +6,7 @@ import cors from 'cors';
 import projectsRoutes from './routes/projects';
 import ligRoutes from './routes/lig';
 import driveRoutes from './routes/drive';
+import clientsRoutes from './routes/clients';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -17,6 +18,7 @@ app.use(express.json());
 app.use('/api/projects', projectsRoutes);
 app.use('/api/lig', ligRoutes);
 app.use('/api/data', driveRoutes);
+app.use('/api/clients', clientsRoutes);
 
 app.get('/health', (req, res) => {
     res.send('Server is running');

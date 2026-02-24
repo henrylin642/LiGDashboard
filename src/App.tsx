@@ -20,6 +20,7 @@ import { LightIdStatsPage } from "./components/LightIdStatsPage";
 import { SceneStatsPage } from "./components/SceneStatsPage";
 import { ScanRawDataPage } from "./components/ScanRawDataPage";
 import { ClickRawLogPage } from "./components/ClickRawLogPage";
+import { ClientManagementPanel } from "./components/ClientManagementPanel";
 import {
   computeClickRanking,
   buildClickSessionAnalytics,
@@ -4780,6 +4781,8 @@ function SettingsPage({
           ))}
         </ul>
       </div>
+
+      <ClientManagementPanel />
 
       <div className="panel panel--surface">
         <h3 className="panel__title">資料來源更新</h3>
