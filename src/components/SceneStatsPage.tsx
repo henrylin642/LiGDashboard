@@ -54,8 +54,20 @@ export function SceneStatsPage() {
             }
         });
 
-        // 1. Start with ALL scenes
-        return data.scenes.map((scene): SceneStats => {
+        // 1. Start with ALL scenes (merge from data.scenes and data.coordinateSystems as fallback)
+        const sceneMap = new Map<number, { id: number; name: string }>();
+        data.scenes.forEach(s => {
+            sceneMap.set(s.id, { id: s.id, name: s.name });
+        });
+        data.coordinateSystems.forEach(cs => {
+            if (cs.sceneId) {
+                if (!sceneMap.has(cs.sceneId)) {
+                    sceneMap.set(cs.sceneId, { id: cs.sceneId, name: cs.sceneName || `Scene ${cs.sceneId}` });
+                }
+            }
+        });
+
+        return Array.from(sceneMap.values()).map((scene): SceneStats => {
             const sceneId = scene.id;
 
             // Find linked Coordinate Systems (O(1) lookup)
