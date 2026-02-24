@@ -1125,8 +1125,8 @@ function App() {
         )}
         {page === "lightStats" && <LightIdStatsPage />}
         {page === "sceneStats" && <SceneStatsPage />}
-        {page === "scanRaw" && <ScanRawDataPage scans={scopedData?.scans ?? []} />}
-        {page === "clickRaw" && <ClickRawLogPage clicks={scopedData?.clicks ?? []} />}
+        {page === "scanRaw" && <ScanRawDataPage scans={readyData?.scans ?? []} />}
+        {page === "clickRaw" && <ClickRawLogPage clicks={readyData?.clicks ?? []} />}
         {page === "settings" && (
           <SettingsPage ownerOptions={ownerOptions} onNavigateHome={() => setPage("all")} onReloadData={dataState.reloadProjects} />
         )}

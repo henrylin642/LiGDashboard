@@ -10,15 +10,19 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
     const [currentPage, setCurrentPage] = useState(1);
     const itemsPerPage = 100;
 
-    const totalPages = Math.max(1, Math.ceil(scans.length / itemsPerPage));
+    const sortedScans = useMemo(() => {
+        return [...scans].sort((a, b) => b.time.getTime() - a.time.getTime());
+    }, [scans]);
+
+    const totalPages = Math.max(1, Math.ceil(sortedScans.length / itemsPerPage));
 
     // Ensure current page is within visible bounds if data changes
     const validCurrentPage = Math.min(currentPage, totalPages);
 
     const paginatedScans = useMemo(() => {
         const start = (validCurrentPage - 1) * itemsPerPage;
-        return scans.slice(start, start + itemsPerPage);
-    }, [scans, validCurrentPage, itemsPerPage]);
+        return sortedScans.slice(start, start + itemsPerPage);
+    }, [sortedScans, validCurrentPage, itemsPerPage]);
 
     return (
         <div className="panel panel--surface" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px", height: "calc(100vh - 120px)" }}>

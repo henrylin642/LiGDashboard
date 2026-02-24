@@ -10,15 +10,19 @@ export function ClickRawLogPage({ clicks }: ClickRawLogPageProps) {
     const [currentPage, setCurrentPage] = useState(1);
     const itemsPerPage = 100;
 
-    const totalPages = Math.max(1, Math.ceil(clicks.length / itemsPerPage));
+    const sortedClicks = useMemo(() => {
+        return [...clicks].sort((a, b) => b.time.getTime() - a.time.getTime());
+    }, [clicks]);
+
+    const totalPages = Math.max(1, Math.ceil(sortedClicks.length / itemsPerPage));
 
     // Ensure current page is within visible bounds if data changes
     const validCurrentPage = Math.min(currentPage, totalPages);
 
     const paginatedClicks = useMemo(() => {
         const start = (validCurrentPage - 1) * itemsPerPage;
-        return clicks.slice(start, start + itemsPerPage);
-    }, [clicks, validCurrentPage, itemsPerPage]);
+        return sortedClicks.slice(start, start + itemsPerPage);
+    }, [sortedClicks, validCurrentPage, itemsPerPage]);
 
     return (
         <div className="panel panel--surface" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px", height: "calc(100vh - 120px)" }}>
