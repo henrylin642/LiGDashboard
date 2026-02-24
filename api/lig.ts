@@ -106,14 +106,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
     }
 
+    const queryParams = { ...req.query };
+    delete queryParams.path;
+
     // Default forwarder for everything else
     if (req.method === 'GET') {
-        return forwardRequest(req, res, 'GET', fullPath, undefined, req.query);
+        return forwardRequest(req, res, 'GET', fullPath, undefined, queryParams);
     }
 
     // Pass body for other POSTs if any (though only login was explicit in original)
     if (req.method === 'POST') {
-        return forwardRequest(req, res, 'POST', fullPath, req.body, req.query);
+        return forwardRequest(req, res, 'POST', fullPath, req.body, queryParams);
     }
 
     return res.status(405).json({ error: 'Method not allowed' });
