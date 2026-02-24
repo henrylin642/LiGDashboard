@@ -18,6 +18,8 @@ import { useDashboardData } from "./context/DashboardDataContext";
 import { ProjectFunnelTable } from "./components/ProjectFunnelTable";
 import { LightIdStatsPage } from "./components/LightIdStatsPage";
 import { SceneStatsPage } from "./components/SceneStatsPage";
+import { ScanRawDataPage } from "./components/ScanRawDataPage";
+import { ClickRawLogPage } from "./components/ClickRawLogPage";
 import {
   computeClickRanking,
   buildClickSessionAnalytics,
@@ -197,7 +199,7 @@ import { triggerDataSync } from "./services/dataSync";
 
 type ScopedData = DashboardData;
 
-type PageKey = "all" | "project" | "wall" | "settings" | "lightStats" | "sceneStats";
+type PageKey = "all" | "project" | "wall" | "settings" | "lightStats" | "sceneStats" | "scanRaw" | "clickRaw";
 
 interface DateRange {
   start: Date;
@@ -1009,6 +1011,22 @@ function App() {
             </button>
             <button
               type="button"
+              className={`app__nav-button${page === "scanRaw" ? " app__nav-button--active" : ""
+                }`}
+              onClick={() => setPage("scanRaw")}
+            >
+              ScanRawData
+            </button>
+            <button
+              type="button"
+              className={`app__nav-button${page === "clickRaw" ? " app__nav-button--active" : ""
+                }`}
+              onClick={() => setPage("clickRaw")}
+            >
+              ClickRawLog
+            </button>
+            <button
+              type="button"
               className={`app__nav-button${page === "wall" ? " app__nav-button--active" : ""
                 }`}
               onClick={() => setPage("wall")}
@@ -1107,6 +1125,8 @@ function App() {
         )}
         {page === "lightStats" && <LightIdStatsPage />}
         {page === "sceneStats" && <SceneStatsPage />}
+        {page === "scanRaw" && <ScanRawDataPage scans={scopedData?.scans ?? []} />}
+        {page === "clickRaw" && <ClickRawLogPage clicks={scopedData?.clicks ?? []} />}
         {page === "settings" && (
           <SettingsPage ownerOptions={ownerOptions} onNavigateHome={() => setPage("all")} onReloadData={dataState.reloadProjects} />
         )}
