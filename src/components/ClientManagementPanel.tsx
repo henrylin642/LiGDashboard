@@ -8,6 +8,9 @@ export function ClientManagementPanel() {
     const [error, setError] = useState<string | null>(null);
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
+    const [syncingCache, setSyncingCache] = useState(false);
+    const [syncCacheMsg, setSyncCacheMsg] = useState<string | null>(null);
+
     const loadClients = async () => {
         setLoading(true);
         try {
@@ -109,6 +112,24 @@ export function ClientManagementPanel() {
         }
     };
 
+    const handleSyncCache = async () => {
+        setSyncingCache(true);
+        setSyncCacheMsg('正在背景同步所有客戶的場景與座標資料... 這可能需要幾十秒鐘的時間，請稍候。');
+        setError(null);
+        try {
+            const res = await fetch('/api/cron/sync_lig_cache', { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || '同步快取失敗');
+
+            setSyncCacheMsg(`✅ 快取同步成功！共整理了 ${data.stats?.scenes || 0} 個場景與 ${data.stats?.coords || 0} 個座標系統。請重新整理網頁即可載入最新資料。`);
+        } catch (err: any) {
+            setError(err.message || '同步快取時發生錯誤');
+            setSyncCacheMsg(null);
+        } finally {
+            setSyncingCache(false);
+        }
+    };
+
     return (
         <div className="panel panel--surface">
             <h3 className="panel__title">Client Management (Supabase)</h3>
@@ -119,10 +140,26 @@ export function ClientManagementPanel() {
                     type="file"
                     accept=".csv"
                     onChange={handleFileUpload}
-                    disabled={loading}
+                    disabled={loading || syncingCache}
                     style={{ display: "block", marginBottom: "0.5rem" }}
                 />
                 <small className="form-hint">CSV 必須包含 Id, Name, Email_Users, Password 欄位</small>
+            </div>
+
+            <div style={{ marginBottom: "1.5rem", padding: "1rem", backgroundColor: "#f9f9f9", borderRadius: "8px", border: "1px solid #eee" }}>
+                <h4 style={{ marginTop: 0, marginBottom: "0.5rem" }}>⚡️ 全域場景快取同步</h4>
+                <p style={{ margin: "0 0 1rem 0", fontSize: "0.9em", color: "#666" }}>
+                    更新上方客戶名單後，或者懷疑 Dashboard 場景清單非最新時，點擊下方按鈕可強制系統進入每個帳號抓取最新資料並快取。
+                </p>
+                <button
+                    type="button"
+                    onClick={handleSyncCache}
+                    disabled={syncingCache || loading}
+                    className="primary"
+                >
+                    {syncingCache ? '同步中... 請勿重整或關閉' : '立即同步全網快取'}
+                </button>
+                {syncCacheMsg && <p style={{ marginTop: "0.5rem", marginBottom: 0, color: syncingCache ? "#0066cc" : "green", fontSize: "0.9em" }}>{syncCacheMsg}</p>}
             </div>
 
             {error && <p className="form-error">⚠️ {error}</p>}
