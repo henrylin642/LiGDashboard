@@ -64,16 +64,40 @@ export function scopeDashboardData(
   );
 
   const sceneToProjects = new Map<number, number[]>();
+
+  // 1. Direct project.scenes
   for (const project of scopedProjects) {
-    for (const sceneRaw of project.scenes) {
+    for (const sceneRaw of project.scenes || []) {
       const sceneId = extractSceneId(sceneRaw);
       if (sceneId === null) continue;
-      if (!sceneToProjects.has(sceneId)) {
-        sceneToProjects.set(sceneId, []);
-      }
+      if (!sceneToProjects.has(sceneId)) sceneToProjects.set(sceneId, []);
       const list = sceneToProjects.get(sceneId)!;
-      if (!list.includes(project.projectId)) {
-        list.push(project.projectId);
+      if (!list.includes(project.projectId)) list.push(project.projectId);
+    }
+  }
+
+  // 2. Map via coordinate systems (scene -> lights -> project)
+  for (const [sceneIdStr, lightIds] of Object.entries(data.sceneToLightIds || {})) {
+    const sceneId = Number(sceneIdStr);
+    for (const lightId of lightIds) {
+      const projectIds = scopedLightToProjectIds[lightId] || [];
+      for (const projectId of projectIds) {
+        if (!sceneToProjects.has(sceneId)) sceneToProjects.set(sceneId, []);
+        const list = sceneToProjects.get(sceneId)!;
+        if (!list.includes(projectId)) list.push(projectId);
+      }
+    }
+  }
+
+  // 3. Map via lightConfigs
+  for (const project of scopedProjects) {
+    for (const config of project.lightConfigs || []) {
+      for (const sceneRaw of config.scenes || []) {
+        const sceneId = extractSceneId(sceneRaw);
+        if (sceneId === null) continue;
+        if (!sceneToProjects.has(sceneId)) sceneToProjects.set(sceneId, []);
+        const list = sceneToProjects.get(sceneId)!;
+        if (!list.includes(project.projectId)) list.push(project.projectId);
       }
     }
   }
@@ -81,19 +105,20 @@ export function scopeDashboardData(
   const relevantSceneIds = new Set(sceneToProjects.keys());
 
   const scopedArObjects = data.arObjects.filter(
-    (obj) => obj.sceneId !== null && relevantSceneIds.has(obj.sceneId)
+    (obj) => obj.sceneId !== null && relevantSceneIds.has(Number(obj.sceneId))
   );
 
   const arObjectProjectMap = new Map<number, Set<number>>();
   for (const obj of scopedArObjects) {
     if (obj.sceneId === null) continue;
-    const owners = sceneToProjects.get(obj.sceneId);
+    const owners = sceneToProjects.get(Number(obj.sceneId));
     if (!owners || owners.length === 0) continue;
-    arObjectProjectMap.set(obj.id, new Set(owners));
+    // ensure obj.id is handled as a number
+    arObjectProjectMap.set(Number(obj.id), new Set(owners));
   }
 
   const scopedClicks = data.clicks.filter((click) => {
-    const projectSet = arObjectProjectMap.get(click.objId);
+    const projectSet = arObjectProjectMap.get(Number(click.objId));
     if (!projectSet || projectSet.size === 0) return false;
     return Array.from(projectSet).some((projectId) =>
       isWithinProjectRange(projectId, click.time)
