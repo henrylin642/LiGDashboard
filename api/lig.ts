@@ -48,18 +48,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { path } = req.query;
 
     // Rewrite logic sends path as string (e.g. "api/v1/lights")
-    // If it comes as array, join it.
+    // Note: Vercel rewrite captures `(api/v1/ar_objects_list/5285)` as `path`.
+    // We should ensure it gets properly prefixed with `/` for the upstream URL.
     let fullPath = '';
+
+    // Sometimes Vercel replaces `path` with the actual full route if we use filename routing.
+    // However, our vercel.json rewrite uses `destination: /api/lig?path=$1`
     if (Array.isArray(path)) {
         fullPath = '/' + path.join('/');
-    } else if (path) {
+    } else if (typeof path === 'string') {
         fullPath = '/' + path;
+    } else {
+        // Fallback: if vercel.json rewrite didn't fire, try to extract from req.url
+        // req.url might be `/api/lig/api/v1/ar_objects_list/5285`
+        if (req.url && req.url.startsWith('/api/lig/')) {
+            fullPath = req.url.replace('/api/lig', '');
+            // remove query params from fullPath if any
+            fullPath = fullPath.split('?')[0];
+        }
     }
 
-    // Fallback if path is missing (e.g. hitting base /api/lig)
+    // Still empty?
     if (!fullPath || fullPath === '/') {
-        return res.status(400).json({ error: 'No path specified' });
+        return res.status(400).json({ error: 'No path specified', url: req.url, query: req.query });
     }
+
+    // Clean up double slashes
+    fullPath = fullPath.replace(/\/\//g, '/');
 
     console.log(`[LiG Handler] Method: ${req.method}, Path: ${fullPath}`);
 
