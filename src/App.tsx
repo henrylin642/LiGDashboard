@@ -175,7 +175,7 @@ function getAverageOverlays(
   };
 }
 import { generateProjectReportPdf } from "./utils/projectReport";
-import type { DashboardData, Project, LightConfig } from "./types";
+import type { DashboardData, Project, LightConfig, SceneRecord, CoordinateSystemRecord } from "./types";
 import {
   fetchProjects as fetchAirtableProjects,
   createProject as createAirtableProject,
@@ -187,14 +187,9 @@ import {
   loginLigDashboard,
   fetchLightOptions,
   fetchCoordinatesForLight,
-  fetchSceneOptions,
-  fetchScenesWithMeta,
-  fetchCoordinateSystemsWithMeta,
   fetchScenesForLight,
   fetchLights,
   type LightOption,
-  type SceneDetail,
-  type CoordinateSystemDetail,
 } from "./services/ligApi";
 import { triggerDataSync } from "./services/dataSync";
 
@@ -4161,7 +4156,7 @@ function SettingsPage({
         if (!name) {
           // Try to find name in existing options or pages
           const found = sceneOptions.find(opt => opt.value.startsWith(`${s.id}-`)) ||
-            scenePages.find(page => page.id === s.id);
+            scenePages.find(page => String(page.id) === s.id);
           if (found) {
             // If found in options, value is "ID-Name", extract Name
             if ('value' in found) {
@@ -4255,8 +4250,8 @@ function SettingsPage({
   // Removed lightSearchInput, sceneSearchInput
 
   const [customOwnerEmails, setCustomOwnerEmails] = useState<string[]>([]);
-  const [scenePages, setScenePages] = useState<SceneDetail[]>([]);
-  const [coordinatePages, setCoordinatePages] = useState<CoordinateSystemDetail[]>([]);
+  const [scenePages, setScenePages] = useState<SceneRecord[]>([]);
+  const [coordinatePages, setCoordinatePages] = useState<CoordinateSystemRecord[]>([]);
   const [scenePageIndex, setScenePageIndex] = useState(0);
   const [coordinatePageIndex, setCoordinatePageIndex] = useState(0);
   const [loadingScenes, setLoadingScenes] = useState(false);
@@ -4511,9 +4506,9 @@ function SettingsPage({
     }
   }
 
-  function sortByDescendingId<T extends { id: string }>(records: T[]): T[] {
-    const toNumeric = (value: string): number => {
-      const num = Number(value);
+  function sortByDescendingId<T extends { id: string | number }>(records: T[]): T[] {
+    const toNumeric = (value: string | number): number => {
+      const num = typeof value === 'number' ? value : Number(value);
       return Number.isFinite(num) ? num : 0;
     };
 
@@ -4874,7 +4869,7 @@ function SettingsPage({
                         <tr key={scene.id}>
                           <td>{scene.id}</td>
                           <td>{scene.name}</td>
-                          <td>{(scene.raw as any)?.project_id ?? "-"}</td>
+                          <td>{scene.projectId ?? "-"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -4929,7 +4924,7 @@ function SettingsPage({
                         <tr key={coord.id}>
                           <td>{coord.id}</td>
                           <td>{coord.name}</td>
-                          <td>{coord.projectId ?? "-"}</td>
+                          <td>{coord.sceneId ?? "-"}</td>
                         </tr>
                       ))}
                     </tbody>
