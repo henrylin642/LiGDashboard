@@ -4069,6 +4069,38 @@ function SettingsPage({
   const [loggingIn, setLoggingIn] = useState(false);
   const [ligError, setLigError] = useState<string | null>(null);
 
+  const dashboardData = useDashboardData();
+
+  useEffect(() => {
+    if (dashboardData.status === "ready" && dashboardData.data) {
+      const allScenes = dashboardData.data.scenes;
+      const allCoords = dashboardData.data.coordinateSystems;
+
+      setScenePages(sortByDescendingId(allScenes));
+      setCoordinatePages(sortByDescendingId(allCoords));
+
+      setSceneOptions((prev) =>
+        mergeOptions(
+          prev,
+          allScenes.map((item) => {
+            const value = `${item.id}-${item.name}`;
+            return { value, label: value };
+          })
+        )
+      );
+
+      setCoordinateOptions((prev) =>
+        mergeOptions(
+          prev,
+          allCoords.map((item) => {
+            const value = String(item.id);
+            return { value, label: `${item.id}-${item.name}` };
+          })
+        )
+      );
+    }
+  }, [dashboardData.status, dashboardData.data]);
+
   const [lightConfigs, setLightConfigs] = useState<LightConfig[]>([]);
   const [newLightIdInput, setNewLightIdInput] = useState("");
   const [sceneInputs, setSceneInputs] = useState<Record<string, string>>({});
@@ -4362,58 +4394,16 @@ function SettingsPage({
     console.log("loadReferenceData started", { token: !!token });
     setLigError(null);
     setLoadingLightOptions(true);
-    setLoadingSceneOptions(true);
-    if (token) {
-      setLoadingScenes(true);
-      setLoadingCoordinates(true);
-    } else {
-      setScenePages([]);
-      setCoordinatePages([]);
-      setScenePageIndex(0);
-      setCoordinatePageIndex(0);
-    }
 
     try {
       console.log("Fetching reference data...");
-      const [lights, scenes, scenesMeta, coordinateMeta] = await Promise.all([
-        fetchLightOptions(token),
-        fetchSceneOptions(token || undefined),
-        token ? fetchScenesWithMeta(token) : Promise.resolve([]),
-        token ? fetchCoordinateSystemsWithMeta(token) : Promise.resolve([]),
-      ]);
+      const lights = await fetchLightOptions(token);
+
       console.log("Reference data fetched", {
         lights: lights.length,
-        scenes: scenes.length,
-        scenesMeta: scenesMeta.length,
-        coordinateMeta: coordinateMeta.length
       });
 
       setLightOptions(lights);
-      setSceneOptions((prev) =>
-        mergeOptions(
-          prev,
-          scenes.map((item) => {
-            const value = `${item.id}-${item.name}`;
-            return { value, label: value };
-          })
-        )
-      );
-      setCoordinateOptions((prev) =>
-        mergeOptions(
-          prev,
-          coordinateMeta.map((item) => {
-            const value = String(item.id);
-            return { value, label: `${item.id}-${item.name}` };
-          })
-        )
-      );
-
-      if (token) {
-        const sortedScenes = sortByDescendingId(scenesMeta);
-        const sortedCoords = sortByDescendingId(coordinateMeta);
-        setScenePages(sortedScenes);
-        setCoordinatePages(sortedCoords);
-      }
       console.log("Reference data state updated");
     } catch (error) {
       console.error("loadReferenceData error", error);
