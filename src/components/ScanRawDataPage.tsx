@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { format } from "date-fns";
 import type { ScanRecord } from "../types";
+import { useDashboardData } from "../context/DashboardDataContext";
 
 interface ScanRawDataPageProps {
     scans: ScanRecord[];
@@ -15,6 +16,18 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
     const [currentPage, setCurrentPage] = useState(1);
     const [showSummary, setShowSummary] = useState(true);
     const itemsPerPage = 100;
+    const dashState = useDashboardData();
+
+    // Build CS ID → Name lookup from cached coordinate systems
+    const csNameMap = useMemo<Map<number, string>>(() => {
+        const map = new Map<number, string>();
+        if (dashState.status === "ready" && dashState.data?.coordinateSystems) {
+            for (const cs of dashState.data.coordinateSystems) {
+                if (cs.id && cs.name) map.set(cs.id, cs.name);
+            }
+        }
+        return map;
+    }, [dashState]);
 
     // --- Summary: unique LigID → CS IDs with latest time ---
     const summary = useMemo<LigCsSummary[]>(() => {
@@ -113,7 +126,7 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
                                                             whiteSpace: "nowrap",
                                                         }}
                                                     >
-                                                        CS {e.csId ?? "-"}{" "}
+                                                        CS {e.csId ?? "-"}{e.csId != null && csNameMap.has(e.csId) ? ` ${csNameMap.get(e.csId)}` : ""}{" "}
                                                         <span style={{ color: "#888" }}>
                                                             ({format(e.latestTime, "yyyy/MM/dd HH:mm")})
                                                         </span>
