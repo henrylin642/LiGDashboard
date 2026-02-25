@@ -11,24 +11,24 @@ const API_BASE = process.env.LIG_API_BASE || 'https://api.lig.com.tw';
 async function loginLig(email: string, password: string): Promise<string | null> {
     try {
         const res = await axios.post(`${API_BASE}/api/v1/login`, {
-            account: email,
-            password: password
+            user: { email, password }
         }, {
             headers: { 'Content-Type': 'application/json' }
         });
         return res.data?.token || res.data?.access_token || null;
-    } catch (err) {
-        return null; // Suppress individual login errors
+    } catch (err: any) {
+        console.warn(`[Sync Cache] Login failed for ${email}:`, err.response?.status, err.response?.data);
+        return null;
     }
 }
 
 // Fetch scenes for a token
 async function fetchScenes(token: string) {
     try {
-        const res = await axios.get(`${API_BASE}/api/v1/scenes`, {
+        const res = await axios.get(`${API_BASE}/api/scenes`, {
             headers: { Authorization: `Bearer ${token}` }
         });
-        const data = Array.isArray(res.data) ? res.data : (res.data?.scenes || []);
+        const data = Array.isArray(res.data) ? res.data : (res.data?.scenes || res.data?.data || []);
         if (!Array.isArray(data)) return [];
 
         return data.map(item => ({
@@ -61,7 +61,8 @@ async function fetchCoords(token: string) {
                 name: String(item.name ?? item.title ?? "").trim(),
                 sceneId: item.scene_id ?? null,
                 sceneName: item.scene_name ?? null,
-                lightIds: Array.isArray(item.light_ids) ? item.light_ids : [],
+                lightIds: Array.isArray(item.lights) ? item.lights.map((l: any) => Number(l.id || l.light_id || l)) : [],
+                raw: item,
             };
         }).filter(Boolean);
     } catch {
