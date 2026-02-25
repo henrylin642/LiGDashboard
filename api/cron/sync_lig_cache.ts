@@ -283,9 +283,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         console.log(`[Sync Cache] Done. ${uniqueScenes.length} scenes, ${enrichedCoords.length} coords (${enrichedCoords.filter(c => c.sceneId).length} with scene mapping).`);
 
+        // Build direct light → scene mapping for frontend use
+        const lightToSceneMapPayload: Record<number, { sceneId: number; sceneName: string }> = {};
+        for (const [lightId, sceneIdSet] of lightToSceneIds.entries()) {
+            const sceneId = sceneIdSet.values().next().value!;
+            lightToSceneMapPayload[lightId] = {
+                sceneId,
+                sceneName: lightSceneNames.get(sceneId) || sceneNameMap.get(sceneId) || '',
+            };
+        }
+
         const payload = {
             scenes: uniqueScenes,
             coordinateSystems: enrichedCoords,
+            lightToSceneMap: lightToSceneMapPayload,
         };
 
         // Write to cache
