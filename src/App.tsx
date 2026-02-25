@@ -21,6 +21,7 @@ import { SceneStatsPage } from "./components/SceneStatsPage";
 import { ScanRawDataPage } from "./components/ScanRawDataPage";
 import { ClickRawLogPage } from "./components/ClickRawLogPage";
 import { ClientManagementPanel } from "./components/ClientManagementPanel";
+import { CoordinateSystemStatsPage } from "./components/CoordinateSystemStatsPage";
 import {
   computeClickRanking,
   buildClickSessionAnalytics,
@@ -195,7 +196,15 @@ import { triggerDataSync } from "./services/dataSync";
 
 type ScopedData = DashboardData;
 
-type PageKey = "all" | "project" | "wall" | "settings" | "lightStats" | "sceneStats" | "scanRaw" | "clickRaw";
+type PageKey = "all"
+  | "project"
+  | "wall"
+  | "settings"
+  | "lightStats"
+  | "sceneStats"
+  | "coordinateStats"
+  | "scanRaw"
+  | "clickRaw";
 
 interface DateRange {
   start: Date;
@@ -1007,6 +1016,14 @@ function App() {
             </button>
             <button
               type="button"
+              className={`app__nav-button${page === "coordinateStats" ? " app__nav-button--active" : ""
+                }`}
+              onClick={() => setPage("coordinateStats")}
+            >
+              Coordinate 系統
+            </button>
+            <button
+              type="button"
               className={`app__nav-button${page === "scanRaw" ? " app__nav-button--active" : ""
                 }`}
               onClick={() => setPage("scanRaw")}
@@ -1121,6 +1138,7 @@ function App() {
         )}
         {page === "lightStats" && <LightIdStatsPage />}
         {page === "sceneStats" && <SceneStatsPage />}
+        {page === "coordinateStats" && <CoordinateSystemStatsPage />}
         {page === "scanRaw" && <ScanRawDataPage scans={readyData?.scans ?? []} />}
         {page === "clickRaw" && <ClickRawLogPage clicks={readyData?.clicks ?? []} />}
         {page === "settings" && (
