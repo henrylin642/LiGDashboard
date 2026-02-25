@@ -1,7 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { format } from "date-fns";
 import type { ScanRecord } from "../types";
 import { useDashboardData } from "../context/DashboardDataContext";
+
+const LIG_API = "https://api.lig.com.tw";
 
 interface ScanRawDataPageProps {
     scans: ScanRecord[];
@@ -29,19 +31,58 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
         return map;
     }, [dashState]);
 
-    // Build Light ID → Scene ID/Name lookup from direct cache mapping
-    const lightToSceneMap = useMemo<Map<number, { sceneId: number; sceneName: string }>>(() => {
-        const map = new Map<number, { sceneId: number; sceneName: string }>();
-        if (dashState.status === "ready" && dashState.data?.lightToSceneMap) {
-            for (const [lidStr, val] of Object.entries(dashState.data.lightToSceneMap)) {
-                const lid = Number(lidStr);
-                if (!isNaN(lid) && val?.sceneId) {
-                    map.set(lid, { sceneId: Number(val.sceneId), sceneName: String(val.sceneName || '') });
-                }
+    // Collect unique light IDs from scans
+    const uniqueLightIds = useMemo(() => {
+        const set = new Set<number>();
+        scans.forEach(s => set.add(s.ligId));
+        return Array.from(set).sort((a, b) => a - b);
+    }, [scans]);
+
+    // Fetch light→scene mappings from browser (bypasses Vercel WAF)
+    const [lightToSceneMap, setLightToSceneMap] = useState<Map<number, { sceneId: number; sceneName: string }>>(new Map());
+    const [fetchProgress, setFetchProgress] = useState({ done: 0, total: 0 });
+
+    const fetchSceneForLight = useCallback(async (lightId: number): Promise<{ sceneId: number; sceneName: string } | null> => {
+        try {
+            const res = await fetch(`${LIG_API}/api/v1/ar_objects_list/${lightId}`);
+            if (!res.ok) return null;
+            const data = await res.json();
+            const scenes = data?.scenes;
+            if (!Array.isArray(scenes) || scenes.length === 0) return null;
+            const s = scenes[0];
+            if (!s.scene_id) return null;
+            return { sceneId: Number(s.scene_id), sceneName: String(s.name ?? '').trim() };
+        } catch {
+            return null;
+        }
+    }, []);
+
+    useEffect(() => {
+        if (uniqueLightIds.length === 0) return;
+        let cancelled = false;
+
+        async function loadMappings() {
+            const BATCH = 10;
+            const result = new Map<number, { sceneId: number; sceneName: string }>();
+            setFetchProgress({ done: 0, total: uniqueLightIds.length });
+
+            for (let i = 0; i < uniqueLightIds.length; i += BATCH) {
+                if (cancelled) return;
+                const batch = uniqueLightIds.slice(i, i + BATCH);
+                const results = await Promise.all(batch.map(lid => fetchSceneForLight(lid)));
+                batch.forEach((lid, idx) => {
+                    const r = results[idx];
+                    if (r) result.set(lid, r);
+                });
+                setFetchProgress({ done: Math.min(i + BATCH, uniqueLightIds.length), total: uniqueLightIds.length });
+                // Update map progressively
+                setLightToSceneMap(new Map(result));
             }
         }
-        return map;
-    }, [dashState]);
+
+        loadMappings();
+        return () => { cancelled = true; };
+    }, [uniqueLightIds, fetchSceneForLight]);
 
     // --- Summary: unique LigID → CS IDs with latest time ---
     const summary = useMemo<LigCsSummary[]>(() => {
@@ -108,7 +149,13 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
                         alignItems: "center",
                     }}
                 >
-                    <span>📋 LigID ↔ CS 對照表（{summary.length} 個 Lig ID）</span>
+                    <span>📋 LigID ↔ CS 對照表（{summary.length} 個 Lig ID）
+                        {fetchProgress.total > 0 && fetchProgress.done < fetchProgress.total && (
+                            <span style={{ fontSize: "11px", color: "#4a90d9", marginLeft: "8px" }}>
+                                ⏳ Scene ID 載入中 {fetchProgress.done}/{fetchProgress.total}
+                            </span>
+                        )}
+                    </span>
                     <span style={{ fontSize: "12px", color: "#888" }}>{showSummary ? "▲ 收起" : "▼ 展開"}</span>
                 </button>
 
