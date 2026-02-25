@@ -29,6 +29,23 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
         return map;
     }, [dashState]);
 
+    // Build Light ID → Scene ID/Name lookup from enriched CS cache
+    const lightToSceneMap = useMemo<Map<number, { sceneId: number; sceneName: string }>>(() => {
+        const map = new Map<number, { sceneId: number; sceneName: string }>();
+        if (dashState.status === "ready" && dashState.data?.coordinateSystems) {
+            for (const cs of dashState.data.coordinateSystems as any[]) {
+                if (cs.sceneId && Array.isArray(cs.lightIds)) {
+                    for (const lid of cs.lightIds) {
+                        if (!map.has(lid)) {
+                            map.set(lid, { sceneId: cs.sceneId, sceneName: cs.sceneName || '' });
+                        }
+                    }
+                }
+            }
+        }
+        return map;
+    }, [dashState]);
+
     // --- Summary: unique LigID → CS IDs with latest time ---
     const summary = useMemo<LigCsSummary[]>(() => {
         // key: "ligId|csId"
@@ -104,6 +121,7 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
                             <thead style={{ position: "sticky", top: 0, backgroundColor: "#fafafa", zIndex: 1 }}>
                                 <tr style={{ borderBottom: "2px solid #ddd" }}>
                                     <th style={{ padding: "6px 10px", width: "100px" }}>Lig ID</th>
+                                    <th style={{ padding: "6px 10px", width: "120px" }}>Scene ID</th>
                                     <th style={{ padding: "6px 10px" }}>CS ID（最新時間）</th>
                                 </tr>
                             </thead>
@@ -111,6 +129,20 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
                                 {summary.map(row => (
                                     <tr key={row.ligId} style={{ borderBottom: "1px solid #eee" }}>
                                         <td style={{ padding: "6px 10px", fontWeight: 600 }}>{row.ligId}</td>
+                                        <td style={{ padding: "6px 10px" }}>
+                                            {lightToSceneMap.has(row.ligId) ? (
+                                                <span style={{ fontSize: "12px" }}>
+                                                    {lightToSceneMap.get(row.ligId)!.sceneId}
+                                                    {lightToSceneMap.get(row.ligId)!.sceneName && (
+                                                        <span style={{ color: "#888", marginLeft: "4px" }}>
+                                                            {lightToSceneMap.get(row.ligId)!.sceneName}
+                                                        </span>
+                                                    )}
+                                                </span>
+                                            ) : (
+                                                <span style={{ color: "#ccc" }}>-</span>
+                                            )}
+                                        </td>
                                         <td style={{ padding: "6px 10px" }}>
                                             <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
                                                 {row.entries.map((e, i) => (
@@ -137,7 +169,7 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
                                     </tr>
                                 ))}
                                 {summary.length === 0 && (
-                                    <tr><td colSpan={2} style={{ textAlign: "center", padding: "12px", color: "#999" }}>No data</td></tr>
+                                    <tr><td colSpan={3} style={{ textAlign: "center", padding: "12px", color: "#999" }}>No data</td></tr>
                                 )}
                             </tbody>
                         </table>
@@ -175,6 +207,7 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
                         <tr>
                             <th style={{ padding: "8px" }}>Time</th>
                             <th style={{ padding: "8px" }}>Lig ID</th>
+                            <th style={{ padding: "8px" }}>Scene ID</th>
                             <th style={{ padding: "8px" }}>Client ID</th>
                             <th style={{ padding: "8px" }}>CS ID</th>
                         </tr>
@@ -182,13 +215,16 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
                     <tbody>
                         {paginatedScans.length === 0 ? (
                             <tr>
-                                <td colSpan={4} style={{ textAlign: "center", padding: "20px" }}>No data</td>
+                                <td colSpan={5} style={{ textAlign: "center", padding: "20px" }}>No data</td>
                             </tr>
                         ) : (
                             paginatedScans.map((scan, idx) => (
                                 <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
                                     <td style={{ padding: "8px", whiteSpace: "nowrap" }}>{format(scan.time, "yyyy-MM-dd HH:mm:ss")}</td>
                                     <td style={{ padding: "8px" }}>{scan.ligId}</td>
+                                    <td style={{ padding: "8px", color: lightToSceneMap.has(scan.ligId) ? undefined : "#ccc" }}>
+                                        {lightToSceneMap.has(scan.ligId) ? lightToSceneMap.get(scan.ligId)!.sceneId : "-"}
+                                    </td>
                                     <td style={{ padding: "8px", wordBreak: "break-all", msWordBreak: "break-all" }}>{scan.clientId}</td>
                                     <td style={{ padding: "8px" }}>{scan.coordinateSystemId ?? "-"}</td>
                                 </tr>
