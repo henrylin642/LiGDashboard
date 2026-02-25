@@ -118,10 +118,13 @@ async function fetchScandataLightCsMappings(): Promise<Map<number, Set<number>>>
     const lightToCsMap = new Map<number, Set<number>>();
     try {
         // Try multiple possible paths for the CSV file
+        // On Vercel, includeFiles puts files relative to the function's directory (__dirname)
         const possiblePaths = [
+            path.join(__dirname, 'public', 'data', 'scandata.csv'),
             path.join(process.cwd(), 'public', 'data', 'scandata.csv'),
             path.join(process.cwd(), 'data', 'scandata.csv'),
             path.join(process.cwd(), 'dist', 'data', 'scandata.csv'),
+            path.resolve(__dirname, '..', '..', 'public', 'data', 'scandata.csv'),
         ];
 
         let csvText = '';
@@ -131,6 +134,15 @@ async function fetchScandataLightCsMappings(): Promise<Map<number, Set<number>>>
                 console.log(`[Sync Cache] Read scandata.csv from: ${p} (${csvText.length} bytes)`);
                 break;
             } catch { /* try next path */ }
+        }
+
+        if (!csvText) {
+            // Log diagnostic info for debugging
+            console.warn(`[Sync Cache] scandata.csv NOT FOUND. __dirname=${__dirname}, cwd=${process.cwd()}`);
+            try {
+                const cwdContents = fs.readdirSync(process.cwd()).join(', ');
+                console.warn(`[Sync Cache] cwd contents: ${cwdContents}`);
+            } catch { /* ignore */ }
         }
 
         // Fallback to HTTP fetch if file not found
