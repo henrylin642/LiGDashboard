@@ -6,17 +6,51 @@ interface ScanRawDataPageProps {
     scans: ScanRecord[];
 }
 
+interface LigCsSummary {
+    ligId: number;
+    entries: { csId: number | null; latestTime: Date }[];
+}
+
 export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
     const [currentPage, setCurrentPage] = useState(1);
+    const [showSummary, setShowSummary] = useState(true);
     const itemsPerPage = 100;
+
+    // --- Summary: unique LigID → CS IDs with latest time ---
+    const summary = useMemo<LigCsSummary[]>(() => {
+        // key: "ligId|csId"
+        const map = new Map<string, { ligId: number; csId: number | null; latestTime: Date }>();
+        for (const scan of scans) {
+            const key = `${scan.ligId}|${scan.coordinateSystemId ?? "null"}`;
+            const existing = map.get(key);
+            if (!existing || scan.time > existing.latestTime) {
+                map.set(key, { ligId: scan.ligId, csId: scan.coordinateSystemId, latestTime: scan.time });
+            }
+        }
+
+        // Group by ligId
+        const grouped = new Map<number, { csId: number | null; latestTime: Date }[]>();
+        for (const entry of map.values()) {
+            if (!grouped.has(entry.ligId)) grouped.set(entry.ligId, []);
+            grouped.get(entry.ligId)!.push({ csId: entry.csId, latestTime: entry.latestTime });
+        }
+
+        // Sort entries within each ligId by latestTime desc
+        const result: LigCsSummary[] = [];
+        for (const [ligId, entries] of grouped.entries()) {
+            entries.sort((a, b) => b.latestTime.getTime() - a.latestTime.getTime());
+            result.push({ ligId, entries });
+        }
+        // Sort by ligId ascending
+        result.sort((a, b) => a.ligId - b.ligId);
+        return result;
+    }, [scans]);
 
     const sortedScans = useMemo(() => {
         return [...scans].sort((a, b) => b.time.getTime() - a.time.getTime());
     }, [scans]);
 
     const totalPages = Math.max(1, Math.ceil(sortedScans.length / itemsPerPage));
-
-    // Ensure current page is within visible bounds if data changes
     const validCurrentPage = Math.min(currentPage, totalPages);
 
     const paginatedScans = useMemo(() => {
@@ -27,6 +61,78 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
     return (
         <div className="panel panel--surface" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px", height: "calc(100vh - 120px)" }}>
             <h2>ScanRawData</h2>
+
+            {/* ===== Summary Table ===== */}
+            <div style={{ border: "1px solid #ddd", borderRadius: "8px", overflow: "hidden" }}>
+                <button
+                    type="button"
+                    onClick={() => setShowSummary(s => !s)}
+                    style={{
+                        width: "100%",
+                        padding: "10px 16px",
+                        background: "#f5f5f5",
+                        border: "none",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        fontWeight: 600,
+                        fontSize: "14px",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                    }}
+                >
+                    <span>📋 LigID ↔ CS 對照表（{summary.length} 個 Lig ID）</span>
+                    <span style={{ fontSize: "12px", color: "#888" }}>{showSummary ? "▲ 收起" : "▼ 展開"}</span>
+                </button>
+
+                {showSummary && (
+                    <div style={{ maxHeight: "300px", overflowY: "auto" }}>
+                        <table style={{ width: "100%", textAlign: "left", borderCollapse: "collapse", fontSize: "13px" }}>
+                            <thead style={{ position: "sticky", top: 0, backgroundColor: "#fafafa", zIndex: 1 }}>
+                                <tr style={{ borderBottom: "2px solid #ddd" }}>
+                                    <th style={{ padding: "6px 10px", width: "100px" }}>Lig ID</th>
+                                    <th style={{ padding: "6px 10px" }}>CS ID（最新時間）</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {summary.map(row => (
+                                    <tr key={row.ligId} style={{ borderBottom: "1px solid #eee" }}>
+                                        <td style={{ padding: "6px 10px", fontWeight: 600 }}>{row.ligId}</td>
+                                        <td style={{ padding: "6px 10px" }}>
+                                            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                                                {row.entries.map((e, i) => (
+                                                    <span
+                                                        key={i}
+                                                        style={{
+                                                            display: "inline-block",
+                                                            padding: "2px 8px",
+                                                            borderRadius: "4px",
+                                                            backgroundColor: e.csId != null ? "#e8f4fd" : "#f0f0f0",
+                                                            border: "1px solid #ccc",
+                                                            fontSize: "12px",
+                                                            whiteSpace: "nowrap",
+                                                        }}
+                                                    >
+                                                        CS {e.csId ?? "-"}{" "}
+                                                        <span style={{ color: "#888" }}>
+                                                            ({format(e.latestTime, "MM/dd HH:mm")})
+                                                        </span>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                                {summary.length === 0 && (
+                                    <tr><td colSpan={2} style={{ textAlign: "center", padding: "12px", color: "#999" }}>No data</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+
+            {/* ===== Raw Data Table ===== */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span>Total Records: {scans.length.toLocaleString()}</span>
                 <div>
