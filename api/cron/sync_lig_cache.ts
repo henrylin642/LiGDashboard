@@ -87,14 +87,16 @@ let _arObjectsListFirstError = '';
 
 // Fetch scene mappings for a light via /api/v1/ar_objects_list/{light_id}
 // This is a PUBLIC endpoint — no auth token required
-async function fetchSceneMappingsForLight(lightId: number): Promise<{ sceneId: number; sceneName: string }[]> {
+async function fetchSceneMappingsForLight(lightId: number, token?: string): Promise<{ sceneId: number; sceneName: string }[]> {
     try {
+        const headers: Record<string, string> = {
+            'Accept': 'application/json, */*',
+        };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
         const res = await axios.get(`${API_BASE}/api/v1/ar_objects_list/${lightId}`, {
             timeout: 10000,
-            headers: {
-                'Accept': 'application/json, */*',
-                'User-Agent': 'LiGDashboard-CronSync/1.0',
-            }
+            headers,
         });
         const scenes = res.data?.scenes;
         if (!Array.isArray(scenes)) {
@@ -221,6 +223,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const lightToSceneIds = new Map<number, Set<number>>();
         const lightSceneNames = new Map<number, string>(); // sceneId → sceneName from ar_objects_list
         const allActiveLightIds = new Set<number>(); // collected from all client active lights
+        let savedToken = ''; // save first valid token for ar_objects_list calls
 
         const BATCH_SIZE = 3;
         for (let i = 0; i < clients.length; i += BATCH_SIZE) {
@@ -230,6 +233,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 if (!client.email || !client.password) return;
                 const token = await loginLig(client.email, client.password);
                 if (!token) return;
+                if (!savedToken) savedToken = token;
 
                 // Fetch basic data
                 const [scenes, coords, activeLightIds] = await Promise.all([
@@ -266,7 +270,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         for (let j = 0; j < allLightIds.length; j += LIGHT_BATCH) {
             const lightBatch = allLightIds.slice(j, j + LIGHT_BATCH);
             const results = await Promise.all(
-                lightBatch.map(lid => fetchSceneMappingsForLight(lid))
+                lightBatch.map(lid => fetchSceneMappingsForLight(lid, savedToken))
             );
             lightBatch.forEach((lid, idx) => {
                 const sceneMappings = results[idx];
