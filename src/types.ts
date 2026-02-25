@@ -87,6 +87,7 @@ export interface DashboardData {
   sceneToLightIds: Record<number, number[]>;
   scenes: SceneRecord[];
   sceneById: Record<number, SceneRecord>;
+  lightToSceneMap: Record<number, { sceneId: number; sceneName: string }>;
 }
 
 export interface DashboardDataState {

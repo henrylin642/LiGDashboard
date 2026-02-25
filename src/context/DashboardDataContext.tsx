@@ -68,7 +68,7 @@ export function DashboardDataProvider({
       try {
         setState({ status: "loading" });
         // Load aggregated scenes and coordinate systems
-        const { coordinateSystems, scenesMeta: scenes } = await loadAggregatedScenesAndCoords(ligToken);
+        const { coordinateSystems, scenesMeta: scenes, lightToSceneMap } = await loadAggregatedScenesAndCoords(ligToken);
 
         const [
           projects,
@@ -155,6 +155,7 @@ export function DashboardDataProvider({
             scenes: loadedScenes,
             sceneById,
             firstClickByUser,
+            lightToSceneMap: lightToSceneMap || {},
           },
         });
       } catch (err) {
@@ -503,7 +504,8 @@ async function loadAggregatedScenesAndCoords(baseToken: string) {
         if (payload.data.scenes.length > 0) {
           return {
             coordinateSystems: payload.data.coordinateSystems,
-            scenesMeta: payload.data.scenes
+            scenesMeta: payload.data.scenes,
+            lightToSceneMap: payload.data.lightToSceneMap || {},
           };
         } else {
           console.warn("Cached scenes array is empty. Ignoring cache to use fallback.");
@@ -527,7 +529,7 @@ async function loadAggregatedScenesAndCoords(baseToken: string) {
       loadCoordinateSystems(baseToken),
       fetchScenesWithMeta(baseToken)
     ]);
-    return { coordinateSystems, scenesMeta };
+    return { coordinateSystems, scenesMeta, lightToSceneMap: {} };
   }
 
   // Aggregate across clients (Slow fallback)
@@ -566,6 +568,7 @@ async function loadAggregatedScenesAndCoords(baseToken: string) {
 
   return {
     coordinateSystems: Array.from(uniqueCoordsMap.values()),
-    scenesMeta: Array.from(uniqueScenesMap.values() as IterableIterator<any>)
+    scenesMeta: Array.from(uniqueScenesMap.values() as IterableIterator<any>),
+    lightToSceneMap: {},
   };
 }

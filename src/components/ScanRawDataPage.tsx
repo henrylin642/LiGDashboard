@@ -32,16 +32,11 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
     // Build Light ID → Scene ID/Name lookup from direct cache mapping
     const lightToSceneMap = useMemo<Map<number, { sceneId: number; sceneName: string }>>(() => {
         const map = new Map<number, { sceneId: number; sceneName: string }>();
-        if (dashState.status === "ready" && dashState.data) {
-            // Use direct lightToSceneMap from cache (populated by ar_objects_list API)
-            const cached = (dashState.data as any).lightToSceneMap;
-            if (cached && typeof cached === 'object') {
-                for (const [lidStr, val] of Object.entries(cached)) {
-                    const lid = Number(lidStr);
-                    const v = val as any;
-                    if (!isNaN(lid) && v?.sceneId) {
-                        map.set(lid, { sceneId: Number(v.sceneId), sceneName: String(v.sceneName || '') });
-                    }
+        if (dashState.status === "ready" && dashState.data?.lightToSceneMap) {
+            for (const [lidStr, val] of Object.entries(dashState.data.lightToSceneMap)) {
+                const lid = Number(lidStr);
+                if (!isNaN(lid) && val?.sceneId) {
+                    map.set(lid, { sceneId: Number(val.sceneId), sceneName: String(val.sceneName || '') });
                 }
             }
         }
