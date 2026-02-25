@@ -82,11 +82,10 @@ async function fetchActiveLights(token: string): Promise<number[]> {
 }
 
 // Fetch scene mappings for a light via /api/v1/ar_objects_list/{light_id}
-// Returns { scenes: [{ scene_id, name, thumbnail, ar_objects }] }
-async function fetchSceneMappingsForLight(token: string, lightId: number): Promise<{ sceneId: number; sceneName: string }[]> {
+// This is a PUBLIC endpoint — no auth token required
+async function fetchSceneMappingsForLight(lightId: number): Promise<{ sceneId: number; sceneName: string }[]> {
     try {
         const res = await axios.get(`${API_BASE}/api/v1/ar_objects_list/${lightId}`, {
-            headers: { Authorization: `Bearer ${token}` },
             timeout: 10000
         });
         const scenes = res.data?.scenes;
@@ -191,34 +190,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
                 allScenes.push(...scenes);
                 allCoords.push(...coords);
-
-                // For each active light, get scene mappings via ar_objects_list
-                // Process in mini-batches of 5 to avoid rate limits
-                const LIGHT_BATCH = 5;
-                for (let j = 0; j < activeLightIds.length; j += LIGHT_BATCH) {
-                    const lightBatch = activeLightIds.slice(j, j + LIGHT_BATCH);
-                    const results = await Promise.all(
-                        lightBatch.map(lid => fetchSceneMappingsForLight(token, lid))
-                    );
-                    lightBatch.forEach((lid, idx) => {
-                        const sceneMappings = results[idx];
-                        if (sceneMappings.length > 0) {
-                            if (!lightToSceneIds.has(lid)) {
-                                lightToSceneIds.set(lid, new Set());
-                            }
-                            sceneMappings.forEach(m => {
-                                lightToSceneIds.get(lid)!.add(m.sceneId);
-                                // Store scene name from ar_objects_list (most reliable source)
-                                if (m.sceneName) lightSceneNames.set(m.sceneId, m.sceneName);
-                            });
-                        }
-                    });
-                }
             }));
         }
 
         // Step 4: Wait for scandata parsing
         const lightToCsMap = await scandataPromise;
+
+        // Step 4b: Fetch scene mappings for ALL unique lights from scandata
+        // ar_objects_list is a PUBLIC API — no auth token required
+        const allLightIds = Array.from(lightToCsMap.keys());
+        console.log(`[Sync Cache] Fetching scene mappings for ${allLightIds.length} lights from scandata...`);
+
+        const LIGHT_BATCH = 10;
+        for (let j = 0; j < allLightIds.length; j += LIGHT_BATCH) {
+            const lightBatch = allLightIds.slice(j, j + LIGHT_BATCH);
+            const results = await Promise.all(
+                lightBatch.map(lid => fetchSceneMappingsForLight(lid))
+            );
+            lightBatch.forEach((lid, idx) => {
+                const sceneMappings = results[idx];
+                if (sceneMappings.length > 0) {
+                    if (!lightToSceneIds.has(lid)) {
+                        lightToSceneIds.set(lid, new Set());
+                    }
+                    sceneMappings.forEach(m => {
+                        lightToSceneIds.get(lid)!.add(m.sceneId);
+                        if (m.sceneName) lightSceneNames.set(m.sceneId, m.sceneName);
+                    });
+                }
+            });
+        }
+        console.log(`[Sync Cache] Mapped ${lightToSceneIds.size} lights to scenes.`);
 
         // Step 5: Build the CS ↔ Scene bridge
         // For each light that appears in BOTH maps, we can connect its CS(es) to its Scene(s)
