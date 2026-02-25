@@ -90,7 +90,11 @@ let _arObjectsListFirstError = '';
 async function fetchSceneMappingsForLight(lightId: number): Promise<{ sceneId: number; sceneName: string }[]> {
     try {
         const res = await axios.get(`${API_BASE}/api/v1/ar_objects_list/${lightId}`, {
-            timeout: 10000
+            timeout: 10000,
+            headers: {
+                'Accept': 'application/json, */*',
+                'User-Agent': 'LiGDashboard-CronSync/1.0',
+            }
         });
         const scenes = res.data?.scenes;
         if (!Array.isArray(scenes)) {
