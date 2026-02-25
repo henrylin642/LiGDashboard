@@ -115,7 +115,7 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
                                                     >
                                                         CS {e.csId ?? "-"}{" "}
                                                         <span style={{ color: "#888" }}>
-                                                            ({format(e.latestTime, "MM/dd HH:mm")})
+                                                            ({format(e.latestTime, "yyyy/MM/dd HH:mm")})
                                                         </span>
                                                     </span>
                                                 ))}
