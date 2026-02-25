@@ -333,6 +333,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 coordsWithScene: enrichedCoords.filter(c => c.sceneId).length,
                 coordsWithLights: enrichedCoords.filter(c => c.lightIds.length > 0).length,
                 totalLightsMapped: lightToSceneIds.size,
+                scandataLights: lightToCsMap.size,
+                activeLights: allActiveLightIds.size,
+                combinedLights: allLightIds.length,
+                lightToSceneMapEntries: Object.keys(lightToSceneMapPayload).length,
             }
         });
 
