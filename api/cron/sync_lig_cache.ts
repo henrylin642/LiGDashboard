@@ -171,6 +171,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // light_id → Set<scene_id>
         const lightToSceneIds = new Map<number, Set<number>>();
         const lightSceneNames = new Map<number, string>(); // sceneId → sceneName from ar_objects_list
+        const allActiveLightIds = new Set<number>(); // collected from all client active lights
 
         const BATCH_SIZE = 3;
         for (let i = 0; i < clients.length; i += BATCH_SIZE) {
@@ -190,17 +191,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
                 allScenes.push(...scenes);
                 allCoords.push(...coords);
+
+                // Collect active lights from this client as a supplementary source
+                for (const lid of activeLightIds) {
+                    allActiveLightIds.add(lid);
+                }
             }));
         }
 
         // Step 4: Wait for scandata parsing
         const lightToCsMap = await scandataPromise;
+        console.log(`[Sync Cache] scandata.csv parsed: ${lightToCsMap.size} unique lights with CS mappings.`);
 
-        // Step 4b: Fetch scene mappings for ALL unique lights from scandata
-        // ar_objects_list is a PUBLIC API — no auth token required
-        const allLightIds = Array.from(lightToCsMap.keys());
-        console.log(`[Sync Cache] Fetching scene mappings for ${allLightIds.length} lights from scandata...`);
+        // Step 4b: Fetch scene mappings for ALL known lights
+        // Combine lights from scandata.csv + active lights from clients
+        const combinedLightIds = new Set<number>([
+            ...lightToCsMap.keys(),
+            ...allActiveLightIds
+        ]);
+        console.log(`[Sync Cache] Total unique lights: ${combinedLightIds.size} (scandata: ${lightToCsMap.size}, active: ${allActiveLightIds.size})`);
+        console.log(`[Sync Cache] Fetching scene mappings via ar_objects_list (public, no auth)...`);
 
+        const allLightIds = Array.from(combinedLightIds);
         const LIGHT_BATCH = 10;
         for (let j = 0; j < allLightIds.length; j += LIGHT_BATCH) {
             const lightBatch = allLightIds.slice(j, j + LIGHT_BATCH);
