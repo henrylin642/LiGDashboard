@@ -81,6 +81,8 @@ async function fetchActiveLights(token: string): Promise<number[]> {
     }
 }
 
+let _arObjectsListFirstError = '';
+
 // Fetch scene mappings for a light via /api/v1/ar_objects_list/{light_id}
 // This is a PUBLIC endpoint — no auth token required
 async function fetchSceneMappingsForLight(lightId: number): Promise<{ sceneId: number; sceneName: string }[]> {
@@ -89,7 +91,10 @@ async function fetchSceneMappingsForLight(lightId: number): Promise<{ sceneId: n
             timeout: 10000
         });
         const scenes = res.data?.scenes;
-        if (!Array.isArray(scenes)) return [];
+        if (!Array.isArray(scenes)) {
+            if (!_arObjectsListFirstError) _arObjectsListFirstError = `light=${lightId}: scenes not array, data=${JSON.stringify(res.data).slice(0, 200)}`;
+            return [];
+        }
 
         return scenes
             .filter((s: any) => s.scene_id && !isNaN(Number(s.scene_id)))
@@ -97,7 +102,10 @@ async function fetchSceneMappingsForLight(lightId: number): Promise<{ sceneId: n
                 sceneId: Number(s.scene_id),
                 sceneName: String(s.name ?? '').trim(),
             }));
-    } catch {
+    } catch (err: any) {
+        if (!_arObjectsListFirstError) {
+            _arObjectsListFirstError = `light=${lightId}: ${err?.response?.status || ''} ${err?.code || ''} ${err?.message || 'unknown'}`.trim();
+        }
         return [];
     }
 }
@@ -337,6 +345,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 activeLights: allActiveLightIds.size,
                 combinedLights: allLightIds.length,
                 lightToSceneMapEntries: Object.keys(lightToSceneMapPayload).length,
+                arObjectsListError: _arObjectsListFirstError || null,
             }
         });
 
