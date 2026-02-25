@@ -117,43 +117,46 @@ async function fetchSceneMappingsForLight(lightId: number): Promise<{ sceneId: n
 async function fetchScandataLightCsMappings(): Promise<Map<number, Set<number>>> {
     const lightToCsMap = new Map<number, Set<number>>();
     try {
-        // Try multiple possible paths for the CSV file
-        // On Vercel, includeFiles puts files relative to the function's directory (__dirname)
+        let csvText = '';
+
+        // Try filesystem first (local dev, and some Vercel setups)
         const possiblePaths = [
-            path.join(__dirname, 'public', 'data', 'scandata.csv'),
             path.join(process.cwd(), 'public', 'data', 'scandata.csv'),
-            path.join(process.cwd(), 'data', 'scandata.csv'),
-            path.join(process.cwd(), 'dist', 'data', 'scandata.csv'),
+            path.join(__dirname, 'public', 'data', 'scandata.csv'),
             path.resolve(__dirname, '..', '..', 'public', 'data', 'scandata.csv'),
         ];
 
-        let csvText = '';
         for (const p of possiblePaths) {
             try {
                 csvText = fs.readFileSync(p, 'utf-8');
-                console.log(`[Sync Cache] Read scandata.csv from: ${p} (${csvText.length} bytes)`);
                 break;
             } catch { /* try next path */ }
         }
 
+        // Fallback: fetch from the production deployment's static files
         if (!csvText) {
-            // Log diagnostic info for debugging
-            console.warn(`[Sync Cache] scandata.csv NOT FOUND. __dirname=${__dirname}, cwd=${process.cwd()}`);
-            try {
-                const cwdContents = fs.readdirSync(process.cwd()).join(', ');
-                console.warn(`[Sync Cache] cwd contents: ${cwdContents}`);
-            } catch { /* ignore */ }
+            // Use DEPLOYMENT_URL env or hardcode the known-working URL
+            const urls = [
+                'https://li-g-dashboard.vercel.app/api/data/scandata.csv',
+                process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}/api/data/scandata.csv` : '',
+            ].filter(Boolean);
+
+            for (const url of urls) {
+                try {
+                    const res = await axios.get(url, { timeout: 30000 });
+                    if (typeof res.data === 'string' && res.data.includes('ligtag_id')) {
+                        csvText = res.data;
+                        console.log(`[Sync Cache] Fetched scandata.csv from ${url} (${csvText.length} bytes)`);
+                        break;
+                    }
+                } catch { /* try next URL */ }
+            }
         }
 
-        // Fallback to HTTP fetch if file not found
         if (!csvText) {
-            console.log('[Sync Cache] File not found locally, trying HTTP fetch...');
-            const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-            const res = await axios.get(`${baseUrl}/api/data/scandata.csv`, { timeout: 30000 });
-            csvText = typeof res.data === 'string' ? res.data : '';
+            console.warn('[Sync Cache] scandata.csv NOT FOUND from any source');
+            return lightToCsMap;
         }
-
-        if (!csvText) return lightToCsMap;
 
         const lines = csvText.split('\n');
         if (lines.length < 2) return lightToCsMap;
