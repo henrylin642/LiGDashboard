@@ -489,14 +489,25 @@ async function loadScanCoordinates(): Promise<ScanCoordinateRecord[]> {
 
 async function loadAggregatedScenesAndCoords(baseToken: string) {
   try {
-    const res = await fetch('/api/cached_scenes');
+    const res = await fetch(`/api/cached_scenes?t=${Date.now()}`);
     if (res.ok) {
-      const data = await res.json();
-      if (data && data.data && data.data.scenes && data.data.coordinateSystems) {
-        return {
-          coordinateSystems: data.data.coordinateSystems,
-          scenesMeta: data.data.scenes
-        };
+      const payload = await res.json();
+      if (
+        payload &&
+        payload.data &&
+        Array.isArray(payload.data.scenes) &&
+        Array.isArray(payload.data.coordinateSystems)
+      ) {
+        // If the cache is empty, we completely ignore it and fallback to slow mode
+        // This prevents the UI from going blank during a failed cache sync
+        if (payload.data.scenes.length > 0) {
+          return {
+            coordinateSystems: payload.data.coordinateSystems,
+            scenesMeta: payload.data.scenes
+          };
+        } else {
+          console.warn("Cached scenes array is empty. Ignoring cache to use fallback.");
+        }
       }
     }
   } catch (e) {

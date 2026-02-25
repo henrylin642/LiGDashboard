@@ -22,6 +22,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             .eq('key', 'lig_aggregated_data')
             .single();
 
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+
         if (error) {
             if (error.code === 'PGRST116') {
                 return res.status(404).json({ error: 'Cache not found' });
