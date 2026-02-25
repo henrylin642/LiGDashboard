@@ -17,7 +17,7 @@ async function loginLig(email: string, password: string): Promise<string | null>
         });
         return res.data?.token || res.data?.access_token || null;
     } catch (err: any) {
-        console.warn(`[Sync Cache] Login failed for ${email}:`, err.response?.status, err.response?.data);
+        console.warn(`[Sync Cache] Login failed for ${email}:`, err.response?.status);
         return null;
     }
 }
@@ -34,19 +34,18 @@ async function fetchScenes(token: string) {
         return data.map(item => ({
             id: Number(item.scene_id ?? item.id),
             name: String(item.name ?? item.title ?? "").trim(),
-            raw: item,
-            createdAt: item.created_at ?? item.createdAt ?? null,
-            updatedAt: item.updated_at ?? item.updatedAt ?? null,
+            projectId: item.project_id ?? null,
+            createdAt: item.created_at ?? null,
+            updatedAt: item.updated_at ?? null,
         })).filter(s => !isNaN(s.id));
     } catch {
         return [];
     }
 }
 
-// Fetch coordinate systems for a token
+// Fetch coordinate systems for a token (only returns {id, name})
 async function fetchCoords(token: string) {
     try {
-        // According to ligApi.ts, it uses /api/v1/coordinate_systems
         const res = await axios.get(`${API_BASE}/api/v1/coordinate_systems`, {
             headers: { Authorization: `Bearer ${token}` }
         });
@@ -58,16 +57,91 @@ async function fetchCoords(token: string) {
             if (isNaN(id)) return null;
             return {
                 id,
-                name: String(item.name ?? item.title ?? "").trim(),
-                sceneId: item.scene_id ?? null,
-                sceneName: item.scene_name ?? null,
-                lightIds: Array.isArray(item.lights) ? item.lights.map((l: any) => Number(l.id || l.light_id || l)) : [],
-                raw: item,
+                name: String(item.name ?? "").trim(),
             };
-        }).filter(Boolean);
+        }).filter(Boolean) as { id: number; name: string }[];
     } catch {
         return [];
     }
+}
+
+// Fetch active lights for a token
+async function fetchActiveLights(token: string): Promise<number[]> {
+    try {
+        const res = await axios.get(`${API_BASE}/api/v1/lights?limit=10000`, {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = Array.isArray(res.data) ? res.data : (res.data?.lights || []);
+        return data
+            .filter((l: any) => l.status !== '庫存')
+            .map((l: any) => Number(l.id))
+            .filter((id: number) => !isNaN(id));
+    } catch {
+        return [];
+    }
+}
+
+// Fetch AR objects for a light to get scene_id mappings
+// Uses /api/v1/ar_objects_from_scene/{light_id}
+async function fetchArObjectsFromSceneByLight(token: string, lightId: number): Promise<{ sceneId: number; sceneName?: string }[]> {
+    try {
+        const res = await axios.get(`${API_BASE}/api/v1/ar_objects_from_scene/${lightId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            timeout: 5000
+        });
+        const arObjects = res.data?.ar_objects || (Array.isArray(res.data) ? res.data : []);
+        if (!Array.isArray(arObjects)) return [];
+
+        // Extract unique scene_ids from the AR objects
+        const sceneMap = new Map<number, string>();
+        for (const obj of arObjects) {
+            const sceneId = Number(obj.scene_id);
+            if (!isNaN(sceneId) && sceneId > 0) {
+                sceneMap.set(sceneId, obj.scene_name || '');
+            }
+        }
+        return Array.from(sceneMap.entries()).map(([sceneId, sceneName]) => ({ sceneId, sceneName: sceneName || undefined }));
+    } catch {
+        return [];
+    }
+}
+
+// Parse scandata.csv to extract light_id → coordinate_system_id mappings
+async function fetchScandataLightCsMappings(): Promise<Map<number, Set<number>>> {
+    const lightToCsMap = new Map<number, Set<number>>();
+    try {
+        // In Vercel, we can fetch from our own API endpoint
+        // But scandata.csv is served as static file, so we fetch it directly
+        const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+        const res = await axios.get(`${baseUrl}/api/data/scandata.csv`, { timeout: 30000 });
+        const csvText = res.data;
+        if (typeof csvText !== 'string') return lightToCsMap;
+
+        const lines = csvText.split('\n');
+        if (lines.length < 2) return lightToCsMap;
+
+        // Parse header
+        const header = lines[0].split(',').map(h => h.trim().toLowerCase());
+        const lightIdx = header.findIndex(h => h === 'ligtag_id' || h === 'light_id');
+        const csIdx = header.findIndex(h => h === 'coordinate_system_id');
+
+        if (lightIdx === -1 || csIdx === -1) return lightToCsMap;
+
+        for (let i = 1; i < lines.length; i++) {
+            const cols = lines[i].split(',');
+            const lightId = Number(cols[lightIdx]?.trim());
+            const csId = Number(cols[csIdx]?.trim());
+            if (isNaN(lightId) || isNaN(csId) || csId === 0) continue;
+
+            if (!lightToCsMap.has(lightId)) {
+                lightToCsMap.set(lightId, new Set());
+            }
+            lightToCsMap.get(lightId)!.add(csId);
+        }
+    } catch (err) {
+        console.warn('[Sync Cache] Could not parse scandata.csv for Light→CS mappings:', err);
+    }
+    return lightToCsMap;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -82,20 +156,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
     try {
-        console.log('[Sync Cache] Fetching all clients from Supabase...');
-        const { data: clients, error: clientErr } = await supabase.from('clients').select('email, password');
+        console.log('[Sync Cache] Starting enhanced cache sync...');
 
+        // Step 1: Fetch all clients
+        const { data: clients, error: clientErr } = await supabase.from('clients').select('email, password');
         if (clientErr) throw clientErr;
         if (!clients || clients.length === 0) {
             return res.status(200).json({ message: 'No clients to process.' });
         }
-
         console.log(`[Sync Cache] Processing ${clients.length} clients...`);
 
-        const allScenes: any[] = [];
-        const allCoords: any[] = [];
+        // Step 2: Fetch scandata Light→CS mapping (parallel with client processing)
+        const scandataPromise = fetchScandataLightCsMappings();
 
-        // Process in small batches to avoid LiG API rate limits
+        // Step 3: For each client, fetch scenes, coords, and active lights → scene mappings
+        const allScenes: any[] = [];
+        const allCoords: { id: number; name: string }[] = [];
+        // light_id → Set<scene_id>
+        const lightToSceneIds = new Map<number, Set<number>>();
+
         const BATCH_SIZE = 3;
         for (let i = 0; i < clients.length; i += BATCH_SIZE) {
             const batch = clients.slice(i, i + BATCH_SIZE);
@@ -105,28 +184,108 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 const token = await loginLig(client.email, client.password);
                 if (!token) return;
 
-                const [scenes, coords] = await Promise.all([
+                // Fetch basic data
+                const [scenes, coords, activeLightIds] = await Promise.all([
                     fetchScenes(token),
-                    fetchCoords(token)
+                    fetchCoords(token),
+                    fetchActiveLights(token)
                 ]);
 
                 allScenes.push(...scenes);
                 allCoords.push(...coords);
+
+                // For each active light, get scene mappings
+                // Process in mini-batches of 5 to avoid rate limits
+                const LIGHT_BATCH = 5;
+                for (let j = 0; j < activeLightIds.length; j += LIGHT_BATCH) {
+                    const lightBatch = activeLightIds.slice(j, j + LIGHT_BATCH);
+                    const results = await Promise.all(
+                        lightBatch.map(lid => fetchArObjectsFromSceneByLight(token, lid))
+                    );
+                    lightBatch.forEach((lid, idx) => {
+                        const sceneMappings = results[idx];
+                        if (sceneMappings.length > 0) {
+                            if (!lightToSceneIds.has(lid)) {
+                                lightToSceneIds.set(lid, new Set());
+                            }
+                            sceneMappings.forEach(m => lightToSceneIds.get(lid)!.add(m.sceneId));
+                        }
+                    });
+                }
             }));
         }
 
-        // De-duplicate aggregated results
-        const uniqueScenes = Array.from(new Map(allScenes.map(s => [s.id, s])).values());
-        const uniqueCoords = Array.from(new Map(allCoords.map(c => [c.id, c])).values());
+        // Step 4: Wait for scandata parsing
+        const lightToCsMap = await scandataPromise;
 
-        console.log(`[Sync Cache] Done. Found ${uniqueScenes.length} unique scenes and ${uniqueCoords.length} unique coords.`);
+        // Step 5: Build the CS ↔ Scene bridge
+        // For each light that appears in BOTH maps, we can connect its CS(es) to its Scene(s)
+        const csToSceneIds = new Map<number, Set<number>>();
+        const csToLightIds = new Map<number, Set<number>>();
+
+        for (const [lightId, csIds] of lightToCsMap.entries()) {
+            const sceneIds = lightToSceneIds.get(lightId);
+
+            // Track CS → Light mapping regardless
+            for (const csId of csIds) {
+                if (!csToLightIds.has(csId)) csToLightIds.set(csId, new Set());
+                csToLightIds.get(csId)!.add(lightId);
+            }
+
+            // If we have both CS and Scene for this light, bridge them
+            if (sceneIds && sceneIds.size > 0) {
+                for (const csId of csIds) {
+                    if (!csToSceneIds.has(csId)) csToSceneIds.set(csId, new Set());
+                    for (const sid of sceneIds) {
+                        csToSceneIds.get(csId)!.add(sid);
+                    }
+                }
+            }
+        }
+
+        // Step 6: De-duplicate and enrich
+        const uniqueScenes = Array.from(new Map(allScenes.map(s => [s.id, s])).values());
+
+        const sceneNameMap = new Map<number, string>();
+        uniqueScenes.forEach(s => sceneNameMap.set(s.id, s.name));
+
+        const uniqueCoordsMap = new Map<number, any>();
+        allCoords.forEach(c => {
+            if (!uniqueCoordsMap.has(c.id)) {
+                uniqueCoordsMap.set(c.id, c);
+            }
+        });
+
+        // Build enriched CS list with sceneId, sceneName, lightIds
+        const enrichedCoords = Array.from(uniqueCoordsMap.values()).map(cs => {
+            const sceneIds = csToSceneIds.get(cs.id);
+            const lightIds = csToLightIds.get(cs.id);
+
+            // Pick the first scene as the primary (most CS link to exactly one scene)
+            let sceneId: number | null = null;
+            let sceneName: string | null = null;
+            if (sceneIds && sceneIds.size > 0) {
+                sceneId = sceneIds.values().next().value!;
+                sceneName = sceneNameMap.get(sceneId) || null;
+            }
+
+            return {
+                id: cs.id,
+                name: cs.name,
+                sceneId,
+                sceneName,
+                lightIds: lightIds ? Array.from(lightIds).sort((a, b) => a - b) : [],
+            };
+        });
+
+        console.log(`[Sync Cache] Done. ${uniqueScenes.length} scenes, ${enrichedCoords.length} coords (${enrichedCoords.filter(c => c.sceneId).length} with scene mapping).`);
 
         const payload = {
             scenes: uniqueScenes,
-            coordinateSystems: uniqueCoords,
+            coordinateSystems: enrichedCoords,
         };
 
-        // Write to cache using `upsert`
+        // Write to cache
         const { error: upsertErr } = await supabase
             .from('api_cache')
             .upsert({
@@ -139,8 +298,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         return res.status(200).json({
             success: true,
-            message: 'Cache updated successfully.',
-            stats: { scenes: uniqueScenes.length, coords: uniqueCoords.length }
+            message: 'Cache updated successfully with enriched CS→Scene mappings.',
+            stats: {
+                scenes: uniqueScenes.length,
+                coords: enrichedCoords.length,
+                coordsWithScene: enrichedCoords.filter(c => c.sceneId).length,
+                coordsWithLights: enrichedCoords.filter(c => c.lightIds.length > 0).length,
+                totalLightsMapped: lightToSceneIds.size,
+            }
         });
 
     } catch (error: any) {
