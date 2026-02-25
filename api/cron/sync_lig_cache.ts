@@ -1,6 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Required environment variables
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -111,15 +113,35 @@ async function fetchSceneMappingsForLight(lightId: number): Promise<{ sceneId: n
 }
 
 // Parse scandata.csv to extract light_id → coordinate_system_id mappings
+// Reads directly from filesystem (HTTP self-fetch doesn't work on Vercel)
 async function fetchScandataLightCsMappings(): Promise<Map<number, Set<number>>> {
     const lightToCsMap = new Map<number, Set<number>>();
     try {
-        // In Vercel, we can fetch from our own API endpoint
-        // But scandata.csv is served as static file, so we fetch it directly
-        const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-        const res = await axios.get(`${baseUrl}/api/data/scandata.csv`, { timeout: 30000 });
-        const csvText = res.data;
-        if (typeof csvText !== 'string') return lightToCsMap;
+        // Try multiple possible paths for the CSV file
+        const possiblePaths = [
+            path.join(process.cwd(), 'public', 'data', 'scandata.csv'),
+            path.join(process.cwd(), 'data', 'scandata.csv'),
+            path.join(process.cwd(), 'dist', 'data', 'scandata.csv'),
+        ];
+
+        let csvText = '';
+        for (const p of possiblePaths) {
+            try {
+                csvText = fs.readFileSync(p, 'utf-8');
+                console.log(`[Sync Cache] Read scandata.csv from: ${p} (${csvText.length} bytes)`);
+                break;
+            } catch { /* try next path */ }
+        }
+
+        // Fallback to HTTP fetch if file not found
+        if (!csvText) {
+            console.log('[Sync Cache] File not found locally, trying HTTP fetch...');
+            const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+            const res = await axios.get(`${baseUrl}/api/data/scandata.csv`, { timeout: 30000 });
+            csvText = typeof res.data === 'string' ? res.data : '';
+        }
+
+        if (!csvText) return lightToCsMap;
 
         const lines = csvText.split('\n');
         if (lines.length < 2) return lightToCsMap;
