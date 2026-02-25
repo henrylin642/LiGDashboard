@@ -81,26 +81,23 @@ async function fetchActiveLights(token: string): Promise<number[]> {
     }
 }
 
-// Fetch AR objects for a light to get scene_id mappings
-// Uses /api/v1/ar_objects_from_scene/{light_id}
-async function fetchArObjectsFromSceneByLight(token: string, lightId: number): Promise<{ sceneId: number; sceneName?: string }[]> {
+// Fetch scene mappings for a light via /api/v1/ar_objects_list/{light_id}
+// Returns { scenes: [{ scene_id, name, thumbnail, ar_objects }] }
+async function fetchSceneMappingsForLight(token: string, lightId: number): Promise<{ sceneId: number; sceneName: string }[]> {
     try {
-        const res = await axios.get(`${API_BASE}/api/v1/ar_objects_from_scene/${lightId}`, {
+        const res = await axios.get(`${API_BASE}/api/v1/ar_objects_list/${lightId}`, {
             headers: { Authorization: `Bearer ${token}` },
-            timeout: 5000
+            timeout: 10000
         });
-        const arObjects = res.data?.ar_objects || (Array.isArray(res.data) ? res.data : []);
-        if (!Array.isArray(arObjects)) return [];
+        const scenes = res.data?.scenes;
+        if (!Array.isArray(scenes)) return [];
 
-        // Extract unique scene_ids from the AR objects
-        const sceneMap = new Map<number, string>();
-        for (const obj of arObjects) {
-            const sceneId = Number(obj.scene_id);
-            if (!isNaN(sceneId) && sceneId > 0) {
-                sceneMap.set(sceneId, obj.scene_name || '');
-            }
-        }
-        return Array.from(sceneMap.entries()).map(([sceneId, sceneName]) => ({ sceneId, sceneName: sceneName || undefined }));
+        return scenes
+            .filter((s: any) => s.scene_id && !isNaN(Number(s.scene_id)))
+            .map((s: any) => ({
+                sceneId: Number(s.scene_id),
+                sceneName: String(s.name ?? '').trim(),
+            }));
     } catch {
         return [];
     }
@@ -174,6 +171,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const allCoords: { id: number; name: string }[] = [];
         // light_id → Set<scene_id>
         const lightToSceneIds = new Map<number, Set<number>>();
+        const lightSceneNames = new Map<number, string>(); // sceneId → sceneName from ar_objects_list
 
         const BATCH_SIZE = 3;
         for (let i = 0; i < clients.length; i += BATCH_SIZE) {
@@ -194,13 +192,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 allScenes.push(...scenes);
                 allCoords.push(...coords);
 
-                // For each active light, get scene mappings
+                // For each active light, get scene mappings via ar_objects_list
                 // Process in mini-batches of 5 to avoid rate limits
                 const LIGHT_BATCH = 5;
                 for (let j = 0; j < activeLightIds.length; j += LIGHT_BATCH) {
                     const lightBatch = activeLightIds.slice(j, j + LIGHT_BATCH);
                     const results = await Promise.all(
-                        lightBatch.map(lid => fetchArObjectsFromSceneByLight(token, lid))
+                        lightBatch.map(lid => fetchSceneMappingsForLight(token, lid))
                     );
                     lightBatch.forEach((lid, idx) => {
                         const sceneMappings = results[idx];
@@ -208,7 +206,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                             if (!lightToSceneIds.has(lid)) {
                                 lightToSceneIds.set(lid, new Set());
                             }
-                            sceneMappings.forEach(m => lightToSceneIds.get(lid)!.add(m.sceneId));
+                            sceneMappings.forEach(m => {
+                                lightToSceneIds.get(lid)!.add(m.sceneId);
+                                // Store scene name from ar_objects_list (most reliable source)
+                                if (m.sceneName) lightSceneNames.set(m.sceneId, m.sceneName);
+                            });
                         }
                     });
                 }
@@ -266,7 +268,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             let sceneName: string | null = null;
             if (sceneIds && sceneIds.size > 0) {
                 sceneId = sceneIds.values().next().value!;
-                sceneName = sceneNameMap.get(sceneId) || null;
+                // Prefer name from ar_objects_list, fallback to /api/scenes
+                sceneName = lightSceneNames.get(sceneId) || sceneNameMap.get(sceneId) || null;
             }
 
             return {
