@@ -1,7 +1,7 @@
 {
     "functions": {
         "api/cron/sync_lig_cache.ts": {
-            "includeFiles": "public/data/scandata.csv",
+            "includeFiles": "public/data/{scandata,obj_click_log}.csv",
             "maxDuration": 60
         }
     },

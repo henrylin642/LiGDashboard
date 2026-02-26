@@ -67,8 +67,22 @@ export function DashboardDataProvider({
     async function load() {
       try {
         setState({ status: "loading" });
-        // Load aggregated scenes and coordinate systems
-        const { coordinateSystems, scenesMeta: scenes, lightToSceneMap } = await loadAggregatedScenesAndCoords(ligToken);
+        // Load aggregated scenes, coordinate systems, and daily summaries from cache
+        const {
+          coordinateSystems,
+          scenesMeta: scenes,
+          lightToSceneMap,
+          scanDailySummary,
+          clickDailySummary,
+        } = await loadAggregatedScenesAndCoords(ligToken);
+
+        // Expand daily summaries into synthetic records, or fall back to CSV
+        const scansPromise = scanDailySummary
+          ? Promise.resolve(expandScanDailySummary(scanDailySummary))
+          : loadScans();
+        const clicksPromise = clickDailySummary
+          ? Promise.resolve(expandClickDailySummary(clickDailySummary))
+          : loadClicks();
 
         const [
           projects,
@@ -78,9 +92,9 @@ export function DashboardDataProvider({
           scanCoordinates,
         ] = await Promise.all([
           loadProjects(),
-          loadScans(),
+          scansPromise,
           loadLights(ligToken),
-          loadClicks(),
+          clicksPromise,
           loadScanCoordinates(),
         ]);
 
@@ -342,6 +356,46 @@ async function loadProjects(): Promise<Project[]> {
   return [];
 }
 
+// Expand scan daily summaries from cache into synthetic ScanRecord[]
+function expandScanDailySummary(
+  rows: Array<{ date: string; ligId: number; csId: number | null; clientId: string; count: number }>
+): ScanRecord[] {
+  const records: ScanRecord[] = [];
+  for (const row of rows) {
+    // Create a noon timestamp for this date to avoid timezone boundary issues
+    const time = new Date(row.date + "T12:00:00");
+    if (isNaN(time.getTime())) continue;
+    for (let i = 0; i < row.count; i++) {
+      records.push({
+        time,
+        ligId: row.ligId,
+        clientId: row.clientId,
+        coordinateSystemId: row.csId,
+      });
+    }
+  }
+  return records;
+}
+
+// Expand click daily summaries from cache into synthetic ClickRecord[]
+function expandClickDailySummary(
+  rows: Array<{ date: string; objId: number; codeName: string; count: number }>
+): ClickRecord[] {
+  const records: ClickRecord[] = [];
+  for (const row of rows) {
+    const time = new Date(row.date + "T12:00:00");
+    if (isNaN(time.getTime())) continue;
+    for (let i = 0; i < row.count; i++) {
+      records.push({
+        time,
+        objId: row.objId,
+        codeName: row.codeName,
+      });
+    }
+  }
+  return records;
+}
+
 async function loadScans(): Promise<ScanRecord[]> {
   return fetchCsv<ScanRecord>("/api/data/scandata.csv", (row) => {
     const ligId = parseNumber(row["ligtag_id"]);
@@ -506,6 +560,8 @@ async function loadAggregatedScenesAndCoords(baseToken: string) {
             coordinateSystems: payload.data.coordinateSystems,
             scenesMeta: payload.data.scenes,
             lightToSceneMap: payload.data.lightToSceneMap || {},
+            scanDailySummary: payload.data.scanDailySummary || null,
+            clickDailySummary: payload.data.clickDailySummary || null,
           };
         } else {
           console.warn("Cached scenes array is empty. Ignoring cache to use fallback.");
@@ -529,7 +585,7 @@ async function loadAggregatedScenesAndCoords(baseToken: string) {
       loadCoordinateSystems(baseToken),
       fetchScenesWithMeta(baseToken)
     ]);
-    return { coordinateSystems, scenesMeta, lightToSceneMap: {} };
+    return { coordinateSystems, scenesMeta, lightToSceneMap: {}, scanDailySummary: null, clickDailySummary: null };
   }
 
   // Aggregate across clients (Slow fallback)
@@ -570,5 +626,7 @@ async function loadAggregatedScenesAndCoords(baseToken: string) {
     coordinateSystems: Array.from(uniqueCoordsMap.values()),
     scenesMeta: Array.from(uniqueScenesMap.values() as IterableIterator<any>),
     lightToSceneMap: {},
+    scanDailySummary: null,
+    clickDailySummary: null,
   };
 }

@@ -118,77 +118,148 @@ async function fetchSceneMappingsForLight(lightId: number, token?: string): Prom
     }
 }
 
-// Parse scandata.csv to extract light_id → coordinate_system_id mappings
-// Reads directly from filesystem (HTTP self-fetch doesn't work on Vercel)
-async function fetchScandataLightCsMappings(): Promise<Map<number, Set<number>>> {
-    const lightToCsMap = new Map<number, Set<number>>();
-    try {
-        let csvText = '';
+// Shared helper to fetch a CSV from filesystem or production URL
+async function fetchCsvText(filename: string): Promise<string> {
+    // Try filesystem first (local dev)
+    const possiblePaths = [
+        path.join(process.cwd(), 'public', 'data', filename),
+        path.join(__dirname, 'public', 'data', filename),
+        path.resolve(__dirname, '..', '..', 'public', 'data', filename),
+    ];
 
-        // Try filesystem first (local dev, and some Vercel setups)
-        const possiblePaths = [
-            path.join(process.cwd(), 'public', 'data', 'scandata.csv'),
-            path.join(__dirname, 'public', 'data', 'scandata.csv'),
-            path.resolve(__dirname, '..', '..', 'public', 'data', 'scandata.csv'),
-        ];
+    for (const p of possiblePaths) {
+        try {
+            const text = fs.readFileSync(p, 'utf-8');
+            if (text.length > 0) return text;
+        } catch { /* try next */ }
+    }
 
-        for (const p of possiblePaths) {
-            try {
-                csvText = fs.readFileSync(p, 'utf-8');
-                break;
-            } catch { /* try next path */ }
-        }
+    // Fallback: fetch from production deployment
+    const urls = [
+        `https://li-g-dashboard.vercel.app/api/data/${filename}`,
+        process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}/api/data/${filename}` : '',
+    ].filter(Boolean);
 
-        // Fallback: fetch from the production deployment's static files
-        if (!csvText) {
-            // Use DEPLOYMENT_URL env or hardcode the known-working URL
-            const urls = [
-                'https://li-g-dashboard.vercel.app/api/data/scandata.csv',
-                process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}/api/data/scandata.csv` : '',
-            ].filter(Boolean);
-
-            for (const url of urls) {
-                try {
-                    const res = await axios.get(url, { timeout: 30000 });
-                    if (typeof res.data === 'string' && res.data.includes('ligtag_id')) {
-                        csvText = res.data;
-                        console.log(`[Sync Cache] Fetched scandata.csv from ${url} (${csvText.length} bytes)`);
-                        break;
-                    }
-                } catch { /* try next URL */ }
+    for (const url of urls) {
+        try {
+            const res = await axios.get(url, { timeout: 60000 });
+            if (typeof res.data === 'string' && res.data.length > 100) {
+                console.log(`[Sync Cache] Fetched ${filename} from ${url} (${res.data.length} bytes)`);
+                return res.data;
             }
-        }
+        } catch { /* try next */ }
+    }
 
-        if (!csvText) {
-            console.warn('[Sync Cache] scandata.csv NOT FOUND from any source');
-            return lightToCsMap;
-        }
+    console.warn(`[Sync Cache] ${filename} NOT FOUND from any source`);
+    return '';
+}
+
+interface ScanDailyRow { date: string; ligId: number; csId: number | null; clientId: string; count: number }
+
+// Aggregate scandata.csv → light-CS mappings + daily scan summaries
+async function aggregateScandataCsv(): Promise<{
+    lightToCsMap: Map<number, Set<number>>;
+    scanDailySummary: ScanDailyRow[];
+}> {
+    const lightToCsMap = new Map<number, Set<number>>();
+    const dailyMap = new Map<string, ScanDailyRow>(); // key = "date|ligId|csId|clientId"
+
+    try {
+        const csvText = await fetchCsvText('scandata.csv');
+        if (!csvText) return { lightToCsMap, scanDailySummary: [] };
 
         const lines = csvText.split('\n');
-        if (lines.length < 2) return lightToCsMap;
+        if (lines.length < 2) return { lightToCsMap, scanDailySummary: [] };
 
-        // Parse header
+        // Parse header: time,ligtag_id,client_id,coordinate_system_id
         const header = lines[0].split(',').map(h => h.trim().toLowerCase());
+        const timeIdx = header.findIndex(h => h === 'time');
         const lightIdx = header.findIndex(h => h === 'ligtag_id' || h === 'light_id');
+        const clientIdx = header.findIndex(h => h === 'client_id');
         const csIdx = header.findIndex(h => h === 'coordinate_system_id');
 
-        if (lightIdx === -1 || csIdx === -1) return lightToCsMap;
+        if (lightIdx === -1) return { lightToCsMap, scanDailySummary: [] };
 
         for (let i = 1; i < lines.length; i++) {
             const cols = lines[i].split(',');
             const lightId = Number(cols[lightIdx]?.trim());
-            const csId = Number(cols[csIdx]?.trim());
-            if (isNaN(lightId) || isNaN(csId) || csId === 0) continue;
+            if (isNaN(lightId) || lightId === 0) continue;
 
-            if (!lightToCsMap.has(lightId)) {
-                lightToCsMap.set(lightId, new Set());
+            const csId = csIdx !== -1 ? Number(cols[csIdx]?.trim()) : null;
+            const clientId = clientIdx !== -1 ? (cols[clientIdx]?.trim() || '') : '';
+
+            // Build light→CS map
+            if (csId && !isNaN(csId) && csId !== 0) {
+                if (!lightToCsMap.has(lightId)) lightToCsMap.set(lightId, new Set());
+                lightToCsMap.get(lightId)!.add(csId);
             }
-            lightToCsMap.get(lightId)!.add(csId);
+
+            // Build daily summary
+            let dateStr = '';
+            if (timeIdx !== -1 && cols[timeIdx]) {
+                // Parse "2024-01-01 00:03:55 +0800" → "2024-01-01"
+                dateStr = cols[timeIdx].trim().slice(0, 10);
+            }
+            if (!dateStr || dateStr.length !== 10) continue;
+
+            const key = `${dateStr}|${lightId}|${csId ?? ''}|${clientId}`;
+            const existing = dailyMap.get(key);
+            if (existing) {
+                existing.count++;
+            } else {
+                dailyMap.set(key, { date: dateStr, ligId: lightId, csId: csId && !isNaN(csId) ? csId : null, clientId, count: 1 });
+            }
         }
     } catch (err) {
-        console.warn('[Sync Cache] Could not parse scandata.csv for Light→CS mappings:', err);
+        console.warn('[Sync Cache] Error aggregating scandata.csv:', err);
     }
-    return lightToCsMap;
+
+    return { lightToCsMap, scanDailySummary: Array.from(dailyMap.values()) };
+}
+
+interface ClickDailyRow { date: string; objId: number; codeName: string; count: number }
+
+// Aggregate obj_click_log.csv → daily click summaries
+async function aggregateClickLogCsv(): Promise<ClickDailyRow[]> {
+    const dailyMap = new Map<string, ClickDailyRow>(); // key = "date|objId|codeName"
+
+    try {
+        const csvText = await fetchCsvText('obj_click_log.csv');
+        if (!csvText) return [];
+
+        const lines = csvText.split('\n');
+        if (lines.length < 2) return [];
+
+        // Parse header: time,code_name,obj_id
+        const header = lines[0].split(',').map(h => h.trim().toLowerCase());
+        const timeIdx = header.findIndex(h => h === 'time');
+        const codeIdx = header.findIndex(h => h === 'code_name');
+        const objIdx = header.findIndex(h => h === 'obj_id');
+
+        if (timeIdx === -1 || objIdx === -1) return [];
+
+        for (let i = 1; i < lines.length; i++) {
+            const cols = lines[i].split(',');
+            const objId = Number(cols[objIdx]?.trim());
+            if (isNaN(objId) || objId === 0) continue;
+
+            const codeName = codeIdx !== -1 ? (cols[codeIdx]?.trim() || '') : '';
+            const dateStr = cols[timeIdx]?.trim().slice(0, 10) || '';
+            if (dateStr.length !== 10) continue;
+
+            const key = `${dateStr}|${objId}|${codeName}`;
+            const existing = dailyMap.get(key);
+            if (existing) {
+                existing.count++;
+            } else {
+                dailyMap.set(key, { date: dateStr, objId, codeName, count: 1 });
+            }
+        }
+    } catch (err) {
+        console.warn('[Sync Cache] Error aggregating obj_click_log.csv:', err);
+    }
+
+    return Array.from(dailyMap.values());
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -213,8 +284,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         console.log(`[Sync Cache] Processing ${clients.length} clients...`);
 
-        // Step 2: Fetch scandata Light→CS mapping (parallel with client processing)
-        const scandataPromise = fetchScandataLightCsMappings();
+        // Step 2: Start CSV aggregation in parallel with client processing
+        const scandataPromise = aggregateScandataCsv();
+        const clickLogPromise = aggregateClickLogCsv();
 
         // Step 3: For each client, fetch scenes, coords, and active lights → scene mappings
         const allScenes: any[] = [];
@@ -252,9 +324,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }));
         }
 
-        // Step 4: Wait for scandata parsing
-        const lightToCsMap = await scandataPromise;
-        console.log(`[Sync Cache] scandata.csv parsed: ${lightToCsMap.size} unique lights with CS mappings.`);
+        // Step 4: Wait for CSV aggregation
+        const { lightToCsMap, scanDailySummary } = await scandataPromise;
+        const clickDailySummary = await clickLogPromise;
+        console.log(`[Sync Cache] scandata aggregated: ${lightToCsMap.size} lights, ${scanDailySummary.length} daily scan rows.`);
+        console.log(`[Sync Cache] click log aggregated: ${clickDailySummary.length} daily click rows.`);
 
         // Step 4b: Fetch scene mappings for ALL known lights
         // Combine lights from scandata.csv + active lights from clients
@@ -364,6 +438,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             scenes: uniqueScenes,
             coordinateSystems: enrichedCoords,
             lightToSceneMap: lightToSceneMapPayload,
+            scanDailySummary,
+            clickDailySummary,
         };
 
         // Write to cache
@@ -390,6 +466,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 activeLights: allActiveLightIds.size,
                 combinedLights: allLightIds.length,
                 lightToSceneMapEntries: Object.keys(lightToSceneMapPayload).length,
+                scanDailyRows: scanDailySummary.length,
+                clickDailyRows: clickDailySummary.length,
                 arObjectsListError: _arObjectsListFirstError || null,
             }
         });
