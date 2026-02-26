@@ -25,15 +25,18 @@ export function ClickRawLogPage({ clicks }: ClickRawLogPageProps) {
 
     // --- Summary: unique users + top 10 ---
     const userStats = useMemo(() => {
-        const map = new Map<string, number>();
+        const countMap = new Map<string, number>();
+        const lastClickMap = new Map<string, Date>();
         for (const c of clicks) {
             const userId = (c.codeName || "").trim();
             if (!userId) continue;
-            map.set(userId, (map.get(userId) ?? 0) + 1);
+            countMap.set(userId, (countMap.get(userId) ?? 0) + 1);
+            const prev = lastClickMap.get(userId);
+            if (!prev || c.time > prev) lastClickMap.set(userId, c.time);
         }
-        const totalUniqueUsers = map.size;
-        const top10 = Array.from(map.entries())
-            .map(([userId, count]) => ({ userId, count }))
+        const totalUniqueUsers = countMap.size;
+        const top10 = Array.from(countMap.entries())
+            .map(([userId, count]) => ({ userId, count, lastClick: lastClickMap.get(userId)! }))
             .sort((a, b) => b.count - a.count)
             .slice(0, 10);
         return { totalUniqueUsers, top10 };
@@ -123,16 +126,20 @@ export function ClickRawLogPage({ clicks }: ClickRawLogPageProps) {
                                     <th style={thStyle}>#</th>
                                     <th style={thStyle}>User ID</th>
                                     <th style={{ ...thStyle, textAlign: "right" }}>Click 次數</th>
+                                    <th style={{ ...thStyle, textAlign: "right" }}>最新 Click</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {userStats.top10.map(({ userId, count }, idx) => (
+                                {userStats.top10.map(({ userId, count, lastClick }, idx) => (
                                     <tr key={userId}>
                                         <td style={{ ...tdStyle, color: idx < 3 ? "#d4a017" : "#888", fontWeight: idx < 3 ? 700 : 400 }}>
                                             {idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : `${idx + 1}`}
                                         </td>
                                         <td style={{ ...tdStyle, fontFamily: "monospace" }}>{userId}</td>
                                         <td style={{ ...tdStyle, textAlign: "right" }}>{count.toLocaleString()}</td>
+                                        <td style={{ ...tdStyle, textAlign: "right", fontSize: "12px", color: "#666" }}>
+                                            {format(lastClick, "yyyy/MM/dd HH:mm")}
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
