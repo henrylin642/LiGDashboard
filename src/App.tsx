@@ -2570,6 +2570,14 @@ function ProjectDetailPage({
     });
   }, [dailySeries]);
 
+  const cumulativeClickDaily = useMemo(() => {
+    let sum = 0;
+    return dailyClickSeries.map((p) => {
+      sum += p.total;
+      return sum;
+    });
+  }, [dailyClickSeries]);
+
   const cumulativeVolumeMonthly = useMemo(() => {
     let sum = 0;
     return scanVolumeMonthly.map((p) => {
@@ -3049,17 +3057,43 @@ function ProjectDetailPage({
               <div className="panel panel--surface">
                 <h4>Daily</h4>
                 <Plot
-                  data={[{ type: "bar", x: dailyClickSeries.map(d => d.date), y: dailyClickSeries.map(d => d.total), marker: { color: "#f97316" } }]}
+                  data={[
+                    {
+                      type: "bar",
+                      x: dailyClickSeries.map((d) => d.date),
+                      y: dailyClickSeries.map((d) => d.total),
+                      marker: { color: "#f97316" },
+                      name: "Clicks",
+                    },
+                    {
+                      type: "scatter",
+                      mode: "lines",
+                      x: dailyClickSeries.map((d) => d.date),
+                      y: cumulativeClickDaily,
+                      yaxis: "y2",
+                      line: { color: "#2563eb", width: 2 },
+                      name: "Cumulative",
+                    },
+                  ]}
                   layout={{
                     autosize: true,
-                    margin: { l: 60, r: 40, t: 20, b: 50 },
+                    margin: { l: 60, r: 60, t: 20, b: 50 },
                     xaxis: { title: { text: "Date" }, type: "date", tickformat: "%Y-%m-%d" },
                     yaxis: { title: { text: "Clicks" }, rangemode: "tozero" },
+                    yaxis2: {
+                      title: { text: "Cumulative Clicks" },
+                      overlaying: "y",
+                      side: "right",
+                      showgrid: false,
+                      rangemode: "tozero",
+                      automargin: true,
+                    },
                     shapes: getAverageOverlays(dailyClickSeries, "#ef4444").shapes,
                     annotations: [
                       ...(getPeakAnnotation(dailyClickSeries) || []),
                       ...(getAverageOverlays(dailyClickSeries, "#ef4444").annotations || []),
                     ],
+                    legend: { orientation: "h", x: 0.5, xanchor: "center", y: 1.1 },
                     paper_bgcolor: "transparent",
                     plot_bgcolor: "transparent",
                   }}
