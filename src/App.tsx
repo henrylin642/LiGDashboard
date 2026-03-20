@@ -757,9 +757,27 @@ function App() {
     return buildProjectClickStats(scopedData);
   }, [scopedData]);
 
-  const sessionAnalytics = useMemo(() => {
+  const sessionScopedData = useMemo(() => {
     if (!scopedData) return null;
-    const analytics = buildClickSessionAnalytics(scopedData);
+    return {
+      ...scopedData,
+      clicks: scopedData.rawClicks,
+      firstClickByUser: scopedData.rawFirstClickByUser,
+    };
+  }, [scopedData]);
+
+  const projectSessionScopedData = useMemo(() => {
+    if (!projectScopedData) return null;
+    return {
+      ...projectScopedData,
+      clicks: projectScopedData.rawClicks,
+      firstClickByUser: projectScopedData.rawFirstClickByUser,
+    };
+  }, [projectScopedData]);
+
+  const sessionAnalytics = useMemo(() => {
+    if (!sessionScopedData) return null;
+    const analytics = buildClickSessionAnalytics(sessionScopedData);
     if (dataMultiplier !== 1) {
       analytics.insights.totalSessions = Math.round(analytics.insights.totalSessions * dataMultiplier);
       analytics.insights.topEntryObjects.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
@@ -768,16 +786,15 @@ function App() {
       analytics.insights.topPaths.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
     }
     return analytics;
-  }, [scopedData, dataMultiplier]);
+  }, [sessionScopedData, dataMultiplier]);
   const sessionAnalyticsInRange = useMemo(() => {
-    if (!scopedData) return null;
+    if (!sessionScopedData) return null;
     const start = dateRange.start;
     const end = dateRange.end;
-    const filteredClicks = scopedData.clicks.filter(
+    const filteredClicks = sessionScopedData.clicks.filter(
       (c) => c.time >= start && c.time <= end
     );
-    // Create a shallow copy with filtered clicks
-    const filteredData = { ...scopedData, clicks: filteredClicks };
+    const filteredData = { ...sessionScopedData, clicks: filteredClicks };
     const analytics = buildClickSessionAnalytics(filteredData);
     if (dataMultiplier !== 1) {
       analytics.insights.totalSessions = Math.round(analytics.insights.totalSessions * dataMultiplier);
@@ -787,18 +804,18 @@ function App() {
       analytics.insights.topPaths.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
     }
     return analytics;
-  }, [scopedData, dateRange, dataMultiplier]);
+  }, [sessionScopedData, dateRange, dataMultiplier]);
 
 
 
   const projectSessionAnalyticsInRange = useMemo(() => {
-    if (!projectScopedData) return null;
+    if (!projectSessionScopedData) return null;
     const start = dateRange.start;
     const end = dateRange.end;
-    const filteredClicks = projectScopedData.clicks.filter(
+    const filteredClicks = projectSessionScopedData.clicks.filter(
       (c) => c.time >= start && c.time <= end
     );
-    const filteredData = { ...projectScopedData, clicks: filteredClicks };
+    const filteredData = { ...projectSessionScopedData, clicks: filteredClicks };
     const analytics = buildClickSessionAnalytics(filteredData);
     if (dataMultiplier !== 1) {
       analytics.insights.totalSessions = Math.round(analytics.insights.totalSessions * dataMultiplier);
@@ -808,7 +825,7 @@ function App() {
       analytics.insights.topPaths.forEach((x) => (x.count = Math.round(x.count * dataMultiplier)));
     }
     return analytics;
-  }, [projectScopedData, dateRange, dataMultiplier]);
+  }, [projectSessionScopedData, dateRange, dataMultiplier]);
 
   const objectMarketingMetrics = useMemo(
     () =>

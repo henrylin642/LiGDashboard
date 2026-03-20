@@ -76,6 +76,7 @@ export interface DashboardData {
   projects: Project[];
   scans: ScanRecord[];
   clicks: ClickRecord[];
+  rawClicks: ClickRecord[];
   lights: LightRecord[];
   coordinateSystems: CoordinateSystemRecord[];
   arObjects: ArObjectRecord[];
@@ -83,6 +84,7 @@ export interface DashboardData {
   lightToProjectIds: Record<number, number[]>;
   projectById: Record<number, Project>;
   firstClickByUser: Record<string, Date>;
+  rawFirstClickByUser: Record<string, Date>;
   // Map Scene ID -> Set of Light IDs (which implies Coordinate System)
   sceneToLightIds: Record<number, number[]>;
   scenes: SceneRecord[];

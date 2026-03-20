@@ -125,7 +125,19 @@ export function scopeDashboardData(
     );
   });
 
+  const scopedRawClicks = data.rawClicks.filter((click) => {
+    const projectSet = arObjectProjectMap.get(Number(click.objId));
+    if (!projectSet || projectSet.size === 0) return false;
+    return Array.from(projectSet).some((projectId) =>
+      isWithinProjectRange(projectId, click.time)
+    );
+  });
+
   const sortedScopedClicks = [...scopedClicks]
+    .filter((click) => Boolean(click.codeName))
+    .sort((a, b) => a.time.getTime() - b.time.getTime());
+
+  const sortedScopedRawClicks = [...scopedRawClicks]
     .filter((click) => Boolean(click.codeName))
     .sort((a, b) => a.time.getTime() - b.time.getTime());
 
@@ -138,6 +150,15 @@ export function scopeDashboardData(
     }
   }
 
+  const scopedRawFirstClickByUser: Record<string, Date> = {};
+  for (const click of sortedScopedRawClicks) {
+    const userId = click.codeName!.trim();
+    if (!userId) continue;
+    if (!scopedRawFirstClickByUser[userId]) {
+      scopedRawFirstClickByUser[userId] = click.time;
+    }
+  }
+
   return {
     ...data,
     projects: scopedProjects,
@@ -147,6 +168,8 @@ export function scopeDashboardData(
     scanCoordinates: scopedScanCoordinates,
     arObjects: scopedArObjects,
     clicks: scopedClicks,
+    rawClicks: scopedRawClicks,
     firstClickByUser: scopedFirstClickByUser,
+    rawFirstClickByUser: scopedRawFirstClickByUser,
   };
 }

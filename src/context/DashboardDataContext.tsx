@@ -83,18 +83,26 @@ export function DashboardDataProvider({
         const clicksPromise = clickDailySummary
           ? Promise.resolve(expandClickDailySummary(clickDailySummary))
           : loadClicks();
+        const rawClicksPromise = loadClicks().catch((error) => {
+          console.warn("[DashboardData] 讀取原始 click log 失敗，Session Intelligence 將回退到快取摘要", error);
+          return clickDailySummary
+            ? expandClickDailySummary(clickDailySummary)
+            : [];
+        });
 
         const [
           projects,
           scans,
           lights,
           clicks,
+          rawClicks,
           scanCoordinates,
         ] = await Promise.all([
           loadProjects(),
           scansPromise,
           loadLights(ligToken),
           clicksPromise,
+          rawClicksPromise,
           loadScanCoordinates(),
         ]);
 
@@ -152,6 +160,7 @@ export function DashboardDataProvider({
         });
 
         const firstClickByUser = buildFirstClickByUser(clicks);
+        const rawFirstClickByUser = buildFirstClickByUser(rawClicks);
 
         setState({
           status: "ready",
@@ -162,6 +171,7 @@ export function DashboardDataProvider({
             coordinateSystems,
             arObjects,
             clicks,
+            rawClicks,
             scanCoordinates,
             projectById,
             lightToProjectIds,
@@ -169,6 +179,7 @@ export function DashboardDataProvider({
             scenes: loadedScenes,
             sceneById,
             firstClickByUser,
+            rawFirstClickByUser,
             lightToSceneMap: lightToSceneMap || {},
           },
         });
