@@ -211,17 +211,20 @@ export function DashboardDataProvider({
   }, [ligToken]);
 
   // Track which light IDs have been loaded to avoid duplicate fetches
-  const [loadedLightIds, setLoadedLightIds] = useState<Set<number>>(new Set());
+  const [resolvedLightIds, setResolvedLightIds] = useState<Set<number>>(new Set());
+  const [loadingLightIds, setLoadingLightIds] = useState<Set<number>>(new Set());
 
   const loadArObjectsForLights = async (lightIds: number[]) => {
     if (!ligToken) return;
 
-    // Filter out already loaded IDs
-    const newIds = lightIds.filter(id => !loadedLightIds.has(id));
+    // Filter out already resolved or in-flight IDs
+    const newIds = lightIds.filter(
+      (id) => !resolvedLightIds.has(id) && !loadingLightIds.has(id)
+    );
     if (newIds.length === 0) return;
 
-    // Mark as loaded immediately to prevent race conditions
-    setLoadedLightIds(prev => {
+    // Mark as in-flight immediately to prevent duplicate fetches
+    setLoadingLightIds(prev => {
       const next = new Set(prev);
       newIds.forEach(id => next.add(id));
       return next;
@@ -262,8 +265,24 @@ export function DashboardDataProvider({
       });
     } catch (e) {
       console.error("Failed to lazy load AR objects", e);
+    } finally {
+      setLoadingLightIds((prev) => {
+        const next = new Set(prev);
+        newIds.forEach((id) => next.delete(id));
+        return next;
+      });
+      setResolvedLightIds((prev) => {
+        const next = new Set(prev);
+        newIds.forEach((id) => next.add(id));
+        return next;
+      });
     }
   };
+
+  const areLightIdsResolved = (lightIds: number[]) =>
+    lightIds.every(
+      (id) => resolvedLightIds.has(id) && !loadingLightIds.has(id)
+    );
 
   const reloadProjects = async () => {
     try {
@@ -301,7 +320,13 @@ export function DashboardDataProvider({
   };
 
   return (
-    <DashboardDataContext.Provider value={{ ...state, loadArObjectsForLights, reloadProjects }}>
+    <DashboardDataContext.Provider value={{
+      ...state,
+      loadArObjectsForLights,
+      reloadProjects,
+      arObjectsLoadEnabled: Boolean(ligToken),
+      areLightIdsResolved,
+    }}>
       {children}
     </DashboardDataContext.Provider>
   );

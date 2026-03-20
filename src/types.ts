@@ -98,6 +98,8 @@ export interface DashboardDataState {
   error?: string;
   loadArObjectsForLights?: (lightIds: number[]) => Promise<void>;
   reloadProjects?: () => Promise<void>;
+  arObjectsLoadEnabled?: boolean;
+  areLightIdsResolved?: (lightIds: number[]) => boolean;
 }
 
 export interface LightConfig {

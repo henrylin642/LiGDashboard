@@ -194,6 +194,50 @@ section {
   box-shadow: 0 10px 24px rgba(15, 46, 91, 0.1);
 }
 
+.deferred-data {
+  position: relative;
+}
+
+.deferred-data--loading {
+  min-height: 720px;
+}
+
+.deferred-data--loading > :not(.deferred-data__overlay) {
+  filter: blur(10px);
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+}
+
+.deferred-data__overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  padding: 2rem;
+  text-align: center;
+  border-radius: 18px;
+  background: rgba(243, 246, 250, 0.38);
+  backdrop-filter: blur(4px);
+}
+
+.deferred-data__title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #0f2e5b;
+}
+
+.deferred-data__text {
+  max-width: 420px;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: #46627d;
+}
+
 .panel--surface {
   backdrop-filter: blur(6px);
 }

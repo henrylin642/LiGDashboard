@@ -414,6 +414,12 @@ function App() {
     return computeMergedPerformanceStats(projectScopedData, projectLightConfigs, tempDateRange.start, tempDateRange.end);
   }, [projectScopedData, projectLightConfigs, tempDateRange]);
 
+  const projectDataReady = useMemo(() => {
+    if (!selectedProject) return true;
+    if (!dataState.arObjectsLoadEnabled || !dataState.areLightIdsResolved) return true;
+    return dataState.areLightIdsResolved(selectedProject.lightIds);
+  }, [selectedProject, dataState.arObjectsLoadEnabled, dataState.areLightIdsResolved]);
+
   const [scopedData, setScopedData] = useState<DashboardData | null>(null);
 
   useEffect(() => {
@@ -1150,6 +1156,7 @@ function App() {
             sessionAnalytics={projectSessionAnalyticsInRange}
             projectMergedPerformance={projectMergedPerformance}
             sceneTimeStats={projectSceneTimeStats}
+            projectDataReady={projectDataReady}
           />
         )}
         {page === "wall" && (
@@ -2484,6 +2491,7 @@ interface ProjectDetailPageProps {
   setDataMultiplier: (value: number) => void;
   sceneTimeStats: SceneTimeComparisonRow[];
   projectMergedPerformance: MergedPerformanceRow[];
+  projectDataReady: boolean;
 }
 
 function ProjectDetailPage({
@@ -2513,6 +2521,7 @@ function ProjectDetailPage({
   setDataMultiplier,
   sceneTimeStats,
   projectMergedPerformance,
+  projectDataReady,
 }: ProjectDetailPageProps) {
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [isCalculating, setIsCalculating] = useState(false);
@@ -2933,6 +2942,15 @@ function ProjectDetailPage({
     <>
       {projectDetailsSection}
       {filterSection}
+      <div className={`deferred-data${projectDataReady ? "" : " deferred-data--loading"}`}>
+        {!projectDataReady && (
+          <div className="deferred-data__overlay" role="status" aria-live="polite">
+            <div className="deferred-data__title">資料加載中</div>
+            <div className="deferred-data__text">
+              正在同步 light / scene / AR object 關聯，完成後會顯示正確數據。
+            </div>
+          </div>
+        )}
 
       {/* --- Selected Period Analysis --- */}
       <section>
@@ -2944,7 +2962,7 @@ function ProjectDetailPage({
             type="button"
             className="report-button"
             onClick={handleDownloadReport}
-            disabled={isGeneratingReport}
+            disabled={isGeneratingReport || !projectDataReady}
           >
             {isGeneratingReport ? "產生中…" : "匯出 PDF 報告"}
           </button>
@@ -3520,6 +3538,7 @@ function ProjectDetailPage({
           )}
         </div>
       </section>
+      </div>
     </>
   );
 }
