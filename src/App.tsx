@@ -3557,17 +3557,26 @@ function SessionIntelligenceSection({
                 <div className="metric-card__value">
                   {sessionInsights.totalSessions.toLocaleString()}
                 </div>
+                <div className="metric-card__hint">
+                  同一 user 在同一天內，連續 click 間隔不超過 10 分鐘視為 1 個 session。
+                </div>
               </div>
               <div className="metric-card">
                 <div className="metric-card__title">Avg Duration</div>
                 <div className="metric-card__value">
                   {formatDuration(sessionInsights.avgDurationSeconds)}
                 </div>
+                <div className="metric-card__hint">
+                  平均 session 時長 = 每個 session 最後一次 click 減第一次 click 的平均值。
+                </div>
               </div>
               <div className="metric-card">
                 <div className="metric-card__title">Median Duration</div>
                 <div className="metric-card__value">
                   {formatDuration(sessionInsights.medianDurationSeconds)}
+                </div>
+                <div className="metric-card__hint">
+                  所有 session 時長排序後的中位數，較不受極端長 session 影響。
                 </div>
               </div>
             </div>

@@ -552,6 +552,13 @@ section {
   color: #0f2e5b;
 }
 
+.metric-card__hint {
+  margin-top: 0.45rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #5f7894;
+}
+
 .multi-select {
   width: 100%;
   max-width: 360px;
