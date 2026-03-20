@@ -32,3 +32,8 @@ dashboard-lig-*.json
 # Local Data
 public/data
 .vercel
+
+# Local auth/cache artifacts
+ref/config/auth_token.json
+ref/__pycache__/
+*.pyc

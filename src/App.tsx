@@ -742,8 +742,15 @@ function App() {
       dateRange.start,
       dateRange.end
     );
-    return rows.length > 0 ? rows[0] : null;
-  }, [projectScopedData, dateRange]);
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      ...row,
+      newUsers: row.newUsers * dataMultiplier,
+      activeUsers: row.activeUsers * dataMultiplier,
+      topSceneNewUsers: row.topSceneNewUsers * dataMultiplier,
+    };
+  }, [projectScopedData, dateRange, dataMultiplier]);
 
   const projectClickStats = useMemo(() => {
     if (!scopedData) return new Map<number, { clicks: number; users: number }>();
@@ -874,8 +881,8 @@ function App() {
     const end = dateRange.end;
     return projectScopedData.clicks.filter(
       (click) => click.time >= start && click.time <= end
-    ).length;
-  }, [projectScopedData, dateRange]);
+    ).length * dataMultiplier;
+  }, [projectScopedData, dateRange, dataMultiplier]);
 
   const projectUniqueUsersInRange = useMemo(() => {
     if (!projectScopedData) return 0;
@@ -887,8 +894,8 @@ function App() {
         users.add(click.codeName);
       }
     }
-    return users.size;
-  }, [projectScopedData, dateRange]);
+    return users.size * dataMultiplier;
+  }, [projectScopedData, dateRange, dataMultiplier]);
 
   const projectAllTimeStats = useMemo(() => {
     if (!projectScopedData) return { clicks: 0, users: 0 };
@@ -899,10 +906,10 @@ function App() {
       }
     }
     return {
-      clicks: projectScopedData.clicks.length,
-      users: users.size,
+      clicks: projectScopedData.clicks.length * dataMultiplier,
+      users: users.size * dataMultiplier,
     };
-  }, [projectScopedData]);
+  }, [projectScopedData, dataMultiplier]);
 
   const userAcquisitionRangeSeries = useMemo(() => {
     if (!scopedData) return [];
