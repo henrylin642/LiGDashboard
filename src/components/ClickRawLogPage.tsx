@@ -172,7 +172,7 @@ export function ClickRawLogPage({ clicks }: ClickRawLogPageProps) {
                 </div>
             </div>
 
-            <div className="table-wrapper" style={{ flex: 1, overflowY: "auto" }}>
+            <div className="table-wrapper" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
                 <table style={{ width: "100%", textAlign: "left", borderCollapse: "collapse" }}>
                     <thead style={{ position: "sticky", top: 0, backgroundColor: "#fff", zIndex: 1, borderBottom: "2px solid #ddd" }}>
                         <tr>
