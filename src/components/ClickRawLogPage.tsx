@@ -8,7 +8,7 @@ interface ClickRawLogPageProps {
 
 export function ClickRawLogPage({ clicks }: ClickRawLogPageProps) {
     const [currentPage, setCurrentPage] = useState(1);
-    const [showSummary, setShowSummary] = useState(true);
+    const [showSummary, setShowSummary] = useState(false);
     const itemsPerPage = 100;
 
     // --- Summary: project prefixes (first 3 chars of codeName) ---
