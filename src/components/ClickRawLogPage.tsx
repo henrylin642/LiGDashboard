@@ -85,7 +85,7 @@ export function ClickRawLogPage({ clicks }: ClickRawLogPageProps) {
             {showSummary && (
                 <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", flexShrink: 0 }}>
                     {/* Table 1: Project Prefix Stats */}
-                    <div style={{ flex: "1 1 300px", maxHeight: "280px", overflowY: "auto", border: "1px solid #ddd", borderRadius: "8px" }}>
+                    <div style={{ flex: "1 1 300px", maxHeight: "180px", overflowY: "auto", border: "1px solid #ddd", borderRadius: "8px" }}>
                         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
                             <thead style={{ position: "sticky", top: 0, backgroundColor: "#f5f7fa", zIndex: 1 }}>
                                 <tr>
@@ -114,7 +114,7 @@ export function ClickRawLogPage({ clicks }: ClickRawLogPageProps) {
                     </div>
 
                     {/* Table 2: User Stats + Top 10 */}
-                    <div style={{ flex: "1 1 300px", maxHeight: "280px", overflowY: "auto", border: "1px solid #ddd", borderRadius: "8px" }}>
+                    <div style={{ flex: "1 1 300px", maxHeight: "180px", overflowY: "auto", border: "1px solid #ddd", borderRadius: "8px" }}>
                         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
                             <thead style={{ position: "sticky", top: 0, backgroundColor: "#f5f7fa", zIndex: 1 }}>
                                 <tr>
