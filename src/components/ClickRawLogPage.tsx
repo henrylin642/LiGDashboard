@@ -83,7 +83,7 @@ export function ClickRawLogPage({ clicks }: ClickRawLogPageProps) {
             </button>
 
             {showSummary && (
-                <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", flexShrink: 0 }}>
                     {/* Table 1: Project Prefix Stats */}
                     <div style={{ flex: "1 1 300px", maxHeight: "280px", overflowY: "auto", border: "1px solid #ddd", borderRadius: "8px" }}>
                         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
