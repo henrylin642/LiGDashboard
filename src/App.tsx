@@ -1171,7 +1171,7 @@ function App() {
         {page === "sceneStats" && <SceneStatsPage />}
         {page === "coordinateStats" && <CoordinateSystemStatsPage />}
         {page === "scanRaw" && <ScanRawDataPage scans={readyData?.scans ?? []} />}
-        {page === "clickRaw" && <ClickRawLogPage clicks={readyData?.clicks ?? []} />}
+        {page === "clickRaw" && <ClickRawLogPage clicks={readyData?.clicks ?? []} arObjects={readyData?.arObjects ?? []} />}
         {page === "settings" && (
           <SettingsPage ownerOptions={ownerOptions} onNavigateHome={() => setPage("all")} onReloadData={dataState.reloadProjects} />
         )}

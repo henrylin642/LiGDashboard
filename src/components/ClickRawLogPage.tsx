@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
 import { format } from "date-fns";
-import type { ClickRecord } from "../types";
+import type { ArObjectRecord, ClickRecord } from "../types";
 
 interface ClickRawLogPageProps {
     clicks: ClickRecord[];
+    arObjects: ArObjectRecord[];
 }
 
-export function ClickRawLogPage({ clicks }: ClickRawLogPageProps) {
+export function ClickRawLogPage({ clicks, arObjects }: ClickRawLogPageProps) {
     const [currentPage, setCurrentPage] = useState(1);
     const [showSummary, setShowSummary] = useState(false);
     const itemsPerPage = 100;
@@ -55,6 +56,13 @@ export function ClickRawLogPage({ clicks }: ClickRawLogPageProps) {
     }, [clicks, currentYear]);
 
     const sortedClicks = useMemo(() => [...clicks].sort((a, b) => b.time.getTime() - a.time.getTime()), [clicks]);
+    const arObjectLookup = useMemo(() => {
+        const lookup = new Map<number, ArObjectRecord>();
+        for (const arObject of arObjects) {
+            lookup.set(arObject.id, arObject);
+        }
+        return lookup;
+    }, [arObjects]);
 
     const totalPages = Math.max(1, Math.ceil(sortedClicks.length / itemsPerPage));
     const validCurrentPage = Math.min(currentPage, totalPages);
@@ -208,13 +216,24 @@ export function ClickRawLogPage({ clicks }: ClickRawLogPageProps) {
                                 </td>
                             </tr>
                         ) : (
-                            paginatedClicks.map((click, idx) => (
-                                <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
-                                    <td style={{ padding: "8px", whiteSpace: "nowrap" }}>{format(click.time, "yyyy-MM-dd HH:mm:ss")}</td>
-                                    <td style={{ padding: "8px" }}>{click.codeName}</td>
-                                    <td style={{ padding: "8px" }}>{click.objId}</td>
-                                </tr>
-                            ))
+                            paginatedClicks.map((click, idx) => {
+                                const arObject = arObjectLookup.get(click.objId);
+
+                                return (
+                                    <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
+                                        <td style={{ padding: "8px", whiteSpace: "nowrap" }}>{format(click.time, "yyyy-MM-dd HH:mm:ss")}</td>
+                                        <td style={{ padding: "8px" }}>{click.codeName}</td>
+                                        <td style={{ padding: "8px" }}>
+                                            <div style={{ fontFamily: "monospace" }}>{click.objId}</div>
+                                            <div style={{ fontSize: "12px", color: "#666" }}>
+                                                {arObject?.sceneId != null
+                                                    ? `scene_id: ${arObject.sceneId} | scene_name: ${arObject.sceneName ?? "-"}`
+                                                    : "scene_id: - | scene_name: -"}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })
                         )}
                     </tbody>
                 </table>
