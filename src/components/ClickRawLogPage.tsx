@@ -3,6 +3,8 @@ import { format } from "date-fns";
 import type { ArObjectRecord, ClickRecord } from "../types";
 import { fetchArObjectById } from "../services/ligApi";
 
+const LIG_API = "https://api.lig.com.tw";
+
 interface ClickRawLogPageProps {
     clicks: ClickRecord[];
     arObjects: ArObjectRecord[];
@@ -16,6 +18,30 @@ export function ClickRawLogPage({ clicks, arObjects }: ClickRawLogPageProps) {
     const itemsPerPage = 100;
     const currentYear = new Date().getFullYear();
     const internalTestAccountId = "00054855";
+
+    async function fetchArObjectByIdDirect(objId: number): Promise<ArObjectRecord | null> {
+        try {
+            const response = await fetch(`${LIG_API}/api/v1/ar_objects/${encodeURIComponent(String(objId))}`);
+            if (!response.ok) return null;
+
+            const item = await response.json();
+            const sceneIdRaw = item.scene_id ?? item.sceneId ?? item.scene?.id ?? item.scene?.scene_id ?? null;
+            const sceneName = item.scene_name ?? item.sceneName ?? item.scene?.name ?? item.scene?.scene_name ?? null;
+            const location = item.location;
+
+            return {
+                id: Number(item.id ?? item.obj_id ?? objId),
+                name: String(item.name ?? item.obj_name ?? objId).trim(),
+                sceneId: sceneIdRaw === null || sceneIdRaw === undefined ? null : Number(sceneIdRaw),
+                sceneName: sceneName ? String(sceneName).trim() : null,
+                locationX: location?.x ?? location?.X ?? null,
+                locationY: location?.y ?? location?.Y ?? null,
+                locationZ: location?.z ?? location?.Z ?? null,
+            };
+        } catch {
+            return null;
+        }
+    }
 
     const projectPrefixStats = useMemo(() => {
         const map = new Map<string, number>();
@@ -97,6 +123,9 @@ export function ClickRawLogPage({ clicks, arObjects }: ClickRawLogPageProps) {
             const entries = await Promise.all(
                 missingObjectIds.map(async (objId) => {
                     try {
+                        const directResult = await fetchArObjectByIdDirect(objId);
+                        if (directResult) return [objId, directResult] as const;
+
                         const result = await fetchArObjectById(String(objId), token);
                         if (!result) return [objId, null] as const;
 
