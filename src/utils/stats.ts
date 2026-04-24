@@ -1122,7 +1122,7 @@ export function computeProjectUserAcquisition(
   const endAt = endOfDay(end);
   if (startAt > endAt) return [];
 
-  const sceneToProjects = buildSceneProjectIndex(data.projects);
+  const sceneToProjects = buildSceneProjectIndex(data);
   if (sceneToProjects.size === 0) return [];
 
   const projectIdSet = new Set(data.projects.map((project) => project.projectId));
@@ -1876,7 +1876,7 @@ export function buildProjectClickIndex(data: DashboardData): {
 
 function buildObjectProjectIndex(data: DashboardData): Map<number, number[]> {
   const map = new Map<number, number[]>();
-  const sceneIndex = buildSceneProjectIndex(data.projects);
+  const sceneIndex = buildSceneProjectIndex(data);
   data.arObjects.forEach((obj) => {
     if (obj.sceneId === null) return;
     const owners = sceneIndex.get(obj.sceneId);
@@ -1940,8 +1940,10 @@ function buildProjectScanSummaries(
   return summaries;
 }
 
-function buildSceneProjectIndex(projects: Project[]): Map<number, number[]> {
+function buildSceneProjectIndex(data: DashboardData): Map<number, number[]> {
   const map = new Map<number, number[]>();
+  const { projects, lightToProjectIds, sceneToLightIds } = data;
+
   for (const project of projects) {
     for (const sceneRaw of project.scenes) {
       const sceneId = extractSceneId(sceneRaw);
@@ -1954,7 +1956,40 @@ function buildSceneProjectIndex(projects: Project[]): Map<number, number[]> {
         list.push(project.projectId);
       }
     }
+
+    for (const config of project.lightConfigs ?? []) {
+      for (const sceneRaw of config.scenes ?? []) {
+        const sceneId = extractSceneId(sceneRaw);
+        if (sceneId === null) continue;
+        if (!map.has(sceneId)) {
+          map.set(sceneId, []);
+        }
+        const list = map.get(sceneId)!;
+        if (!list.includes(project.projectId)) {
+          list.push(project.projectId);
+        }
+      }
+    }
   }
+
+  for (const [sceneIdRaw, lightIds] of Object.entries(sceneToLightIds ?? {})) {
+    const sceneId = Number(sceneIdRaw);
+    if (!Number.isFinite(sceneId)) continue;
+
+    for (const lightId of lightIds) {
+      const projectIds = lightToProjectIds[lightId] ?? [];
+      for (const projectId of projectIds) {
+        if (!map.has(sceneId)) {
+          map.set(sceneId, []);
+        }
+        const list = map.get(sceneId)!;
+        if (!list.includes(projectId)) {
+          list.push(projectId);
+        }
+      }
+    }
+  }
+
   return map;
 }
 
