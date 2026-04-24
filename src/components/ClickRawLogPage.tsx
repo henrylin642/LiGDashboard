@@ -1,6 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import type { ArObjectRecord, ClickRecord } from "../types";
+import { fetchArObjectById } from "../services/ligApi";
+
+const LIG_API = "https://api.lig.com.tw";
 
 interface ClickRawLogPageProps {
     clicks: ClickRecord[];
@@ -10,9 +13,35 @@ interface ClickRawLogPageProps {
 export function ClickRawLogPage({ clicks, arObjects }: ClickRawLogPageProps) {
     const [currentPage, setCurrentPage] = useState(1);
     const [showSummary, setShowSummary] = useState(false);
+    const [fetchedArObjects, setFetchedArObjects] = useState<Record<number, ArObjectRecord | null>>({});
+    const [loadingObjectIds, setLoadingObjectIds] = useState<number[]>([]);
     const itemsPerPage = 100;
     const currentYear = new Date().getFullYear();
     const internalTestAccountId = "00054855";
+
+    async function fetchArObjectByIdDirect(objId: number): Promise<ArObjectRecord | null> {
+        try {
+            const response = await fetch(`${LIG_API}/api/v1/ar_objects/${encodeURIComponent(String(objId))}`);
+            if (!response.ok) return null;
+
+            const item = await response.json();
+            const sceneIdRaw = item.scene_id ?? item.sceneId ?? item.scene?.id ?? item.scene?.scene_id ?? null;
+            const sceneName = item.scene_name ?? item.sceneName ?? item.scene?.name ?? item.scene?.scene_name ?? null;
+            const location = item.location;
+
+            return {
+                id: Number(item.id ?? item.obj_id ?? objId),
+                name: String(item.name ?? item.obj_name ?? objId).trim(),
+                sceneId: sceneIdRaw === null || sceneIdRaw === undefined ? null : Number(sceneIdRaw),
+                sceneName: sceneName ? String(sceneName).trim() : null,
+                locationX: location?.x ?? location?.X ?? null,
+                locationY: location?.y ?? location?.Y ?? null,
+                locationZ: location?.z ?? location?.Z ?? null,
+            };
+        } catch {
+            return null;
+        }
+    }
 
     const projectPrefixStats = useMemo(() => {
         const map = new Map<string, number>();
@@ -76,9 +105,78 @@ export function ClickRawLogPage({ clicks, arObjects }: ClickRawLogPageProps) {
         [paginatedClicks]
     );
     const unresolvedVisibleCount = useMemo(
-        () => visibleObjectIds.filter((objId) => !arObjectLookup.has(objId)).length,
-        [arObjectLookup, visibleObjectIds]
+        () =>
+            visibleObjectIds.filter(
+                (objId) => !arObjectLookup.has(objId) && !(objId in fetchedArObjects)
+            ).length,
+        [arObjectLookup, fetchedArObjects, visibleObjectIds]
     );
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+
+        const token = window.localStorage.getItem("lig_token") ?? "";
+        if (!token) return;
+
+        const missingObjectIds = visibleObjectIds.filter(
+            (objId) =>
+                !arObjectLookup.has(objId) &&
+                !(objId in fetchedArObjects) &&
+                !loadingObjectIds.includes(objId)
+        );
+        if (missingObjectIds.length === 0) return;
+
+        let isCancelled = false;
+        setLoadingObjectIds((prev) => Array.from(new Set([...prev, ...missingObjectIds])));
+
+        async function loadMissingObjects() {
+            const entries = await Promise.all(
+                missingObjectIds.map(async (objId) => {
+                    try {
+                        const result = await fetchArObjectById(String(objId), token);
+                        if (result) {
+                            return [
+                                objId,
+                                {
+                                    id: Number(result.id),
+                                    name: result.name,
+                                    sceneId: result.sceneId,
+                                    sceneName: result.sceneName,
+                                    locationX: result.location?.x ?? null,
+                                    locationY: result.location?.y ?? null,
+                                    locationZ: result.location?.z ?? null,
+                                } satisfies ArObjectRecord,
+                            ] as const;
+                        }
+
+                        const directResult = await fetchArObjectByIdDirect(objId);
+                        return [objId, directResult] as const;
+                    } catch (error) {
+                        console.warn(`Failed to resolve object ${objId}`, error);
+                        return [objId, null] as const;
+                    }
+                })
+            );
+
+            if (isCancelled) return;
+
+            setFetchedArObjects((prev) => {
+                const next = { ...prev };
+                for (const [objId, record] of entries) {
+                    next[objId] = record;
+                }
+                return next;
+            });
+
+            setLoadingObjectIds((prev) => prev.filter((objId) => !missingObjectIds.includes(objId)));
+        }
+
+        void loadMissingObjects();
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [arObjectLookup, fetchedArObjects, loadingObjectIds, visibleObjectIds]);
 
     const thStyle: React.CSSProperties = { padding: "6px 10px", textAlign: "left", borderBottom: "2px solid #ccc" };
     const tdStyle: React.CSSProperties = { padding: "5px 10px", borderBottom: "1px solid #eee" };
@@ -231,7 +329,8 @@ export function ClickRawLogPage({ clicks, arObjects }: ClickRawLogPageProps) {
                             </tr>
                         ) : (
                             paginatedClicks.map((click, idx) => {
-                                const arObject = arObjectLookup.get(click.objId);
+                                const arObject = arObjectLookup.get(click.objId) ?? fetchedArObjects[click.objId];
+                                const isLoading = loadingObjectIds.includes(click.objId);
 
                                 return (
                                     <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
@@ -242,7 +341,9 @@ export function ClickRawLogPage({ clicks, arObjects }: ClickRawLogPageProps) {
                                             <div style={{ fontSize: "12px", color: "#666" }}>
                                                 {arObject?.sceneId != null
                                                     ? `scene_id: ${arObject.sceneId} | scene_name: ${arObject.sceneName ?? "-"}`
-                                                    : "scene_id: - | scene_name: -"}
+                                                    : isLoading
+                                                        ? "loading scene..."
+                                                        : "scene_id: - | scene_name: -"}
                                             </div>
                                         </td>
                                     </tr>
