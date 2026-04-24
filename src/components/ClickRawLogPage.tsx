@@ -112,7 +112,10 @@ export function ClickRawLogPage({ clicks, arObjects }: ClickRawLogPageProps) {
         if (!token) return;
 
         const missingObjectIds = visibleObjectIds.filter(
-            (objId) => !arObjectLookup.has(objId) && !(objId in fetchedArObjects) && !loadingObjectIds.includes(objId)
+            (objId) =>
+                !arObjectLookup.has(objId) &&
+                !(objId in fetchedArObjects) &&
+                !loadingObjectIds.includes(objId)
         );
         if (missingObjectIds.length === 0) return;
 
@@ -123,24 +126,24 @@ export function ClickRawLogPage({ clicks, arObjects }: ClickRawLogPageProps) {
             const entries = await Promise.all(
                 missingObjectIds.map(async (objId) => {
                     try {
-                        const directResult = await fetchArObjectByIdDirect(objId);
-                        if (directResult) return [objId, directResult] as const;
-
                         const result = await fetchArObjectById(String(objId), token);
-                        if (!result) return [objId, null] as const;
+                        if (result) {
+                            return [
+                                objId,
+                                {
+                                    id: Number(result.id),
+                                    name: result.name,
+                                    sceneId: result.sceneId,
+                                    sceneName: result.sceneName,
+                                    locationX: result.location?.x ?? null,
+                                    locationY: result.location?.y ?? null,
+                                    locationZ: result.location?.z ?? null,
+                                } satisfies ArObjectRecord,
+                            ] as const;
+                        }
 
-                        return [
-                            objId,
-                            {
-                                id: Number(result.id),
-                                name: result.name,
-                                sceneId: result.sceneId,
-                                sceneName: result.sceneName,
-                                locationX: result.location?.x ?? null,
-                                locationY: result.location?.y ?? null,
-                                locationZ: result.location?.z ?? null,
-                            } satisfies ArObjectRecord,
-                        ] as const;
+                        const directResult = await fetchArObjectByIdDirect(objId);
+                        return [objId, directResult] as const;
                     } catch (error) {
                         console.warn(`Failed to resolve object ${objId}`, error);
                         return [objId, null] as const;
@@ -161,11 +164,10 @@ export function ClickRawLogPage({ clicks, arObjects }: ClickRawLogPageProps) {
             setLoadingObjectIds((prev) => prev.filter((objId) => !missingObjectIds.includes(objId)));
         }
 
-        loadMissingObjects();
+        void loadMissingObjects();
 
         return () => {
             isCancelled = true;
-            setLoadingObjectIds((prev) => prev.filter((objId) => !missingObjectIds.includes(objId)));
         };
     }, [arObjectLookup, fetchedArObjects, loadingObjectIds, visibleObjectIds]);
 
