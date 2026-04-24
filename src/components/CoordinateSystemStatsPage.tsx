@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDashboardData } from "../context/DashboardDataContext";
 
 type SortField = 'id' | 'name' | 'sceneId';
 type SortOrder = 'asc' | 'desc';
+const LIG_API = "https://api.lig.com.tw";
 
 export function CoordinateSystemStatsPage() {
     const { status, data } = useDashboardData();
@@ -11,6 +12,72 @@ export function CoordinateSystemStatsPage() {
     const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
     const [currentPage, setCurrentPage] = useState(1);
     const pageSize = 50;
+    const [lightToSceneMap, setLightToSceneMap] = useState<Map<number, { sceneId: number; sceneName: string }>>(new Map());
+
+    const fetchSceneForLight = useCallback(async (lightId: number): Promise<{ sceneId: number; sceneName: string } | null> => {
+        try {
+            const res = await fetch(`${LIG_API}/api/v1/ar_objects_list/${lightId}`);
+            if (!res.ok) return null;
+            const payload = await res.json();
+            const scenes = Array.isArray(payload) ? payload : payload?.scenes;
+            if (!Array.isArray(scenes) || scenes.length === 0) return null;
+            const first = scenes[0];
+            const sceneId = Number(first.scene_id ?? first.id ?? 0);
+            if (!sceneId) return null;
+            return {
+                sceneId,
+                sceneName: String(first.scene_name ?? first.name ?? "").trim() || `Scene ${sceneId}`,
+            };
+        } catch {
+            return null;
+        }
+    }, []);
+
+    const uniqueLightIds = useMemo(() => {
+        if (status !== "ready" || !data) return [];
+        const ids = new Set<number>();
+        data.coordinateSystems.forEach((cs) => cs.lightIds.forEach((id) => ids.add(id)));
+        data.lights.forEach((light) => ids.add(light.ligId));
+        return Array.from(ids).sort((a, b) => a - b);
+    }, [status, data]);
+
+    useEffect(() => {
+        if (status !== "ready" || !data || uniqueLightIds.length === 0) return;
+
+        let cancelled = false;
+        const initialMap = new Map<number, { sceneId: number; sceneName: string }>();
+        Object.entries(data.lightToSceneMap || {}).forEach(([lightIdRaw, scene]) => {
+            const lightId = Number(lightIdRaw);
+            if (!Number.isFinite(lightId) || !scene?.sceneId) return;
+            initialMap.set(lightId, { sceneId: scene.sceneId, sceneName: scene.sceneName });
+        });
+        setLightToSceneMap(initialMap);
+
+        const missingLightIds = uniqueLightIds.filter((lightId) => !initialMap.has(lightId));
+        if (missingLightIds.length === 0) return;
+
+        async function load() {
+            const result = new Map(initialMap);
+            const BATCH = 10;
+            for (let i = 0; i < missingLightIds.length; i += BATCH) {
+                if (cancelled) return;
+                const batch = missingLightIds.slice(i, i + BATCH);
+                const entries = await Promise.all(batch.map((lightId) => fetchSceneForLight(lightId)));
+                batch.forEach((lightId, index) => {
+                    const item = entries[index];
+                    if (item) result.set(lightId, item);
+                });
+                if (!cancelled) {
+                    setLightToSceneMap(new Map(result));
+                }
+            }
+        }
+
+        void load();
+        return () => {
+            cancelled = true;
+        };
+    }, [status, data, uniqueLightIds, fetchSceneForLight]);
 
     const stats = useMemo(() => {
         if (status !== "ready" || !data) return [];
@@ -21,22 +88,74 @@ export function CoordinateSystemStatsPage() {
             sceneMap.set(s.id, s.name);
         });
 
+        const pushCandidate = (
+            counter: Map<number, { count: number; sceneName: string }>,
+            sceneId: number | null | undefined,
+            sceneName: string | null | undefined
+        ) => {
+            if (!sceneId) return;
+            const current = counter.get(sceneId);
+            counter.set(sceneId, {
+                count: (current?.count ?? 0) + 1,
+                sceneName: sceneName?.trim() || current?.sceneName || sceneMap.get(sceneId) || `Scene ${sceneId}`,
+            });
+        };
+
         // Use the coordinateSystems from DashboardDataContext
         return data.coordinateSystems.map(cs => {
+            let linkedSceneId = cs.sceneId;
             let sName = cs.sceneName;
-            if (!sName && cs.sceneId && sceneMap.has(cs.sceneId)) {
-                sName = sceneMap.get(cs.sceneId)!;
+
+            if ((!linkedSceneId || !sName) && linkedSceneId && sceneMap.has(linkedSceneId)) {
+                sName = sceneMap.get(linkedSceneId)!;
+            }
+
+            if (!linkedSceneId) {
+                const candidates = new Map<number, { count: number; sceneName: string }>();
+
+                (cs.lightIds || []).forEach((lightId) => {
+                    const mapped = lightToSceneMap.get(lightId);
+                    if (mapped) {
+                        pushCandidate(candidates, mapped.sceneId, mapped.sceneName);
+                    }
+                });
+
+                data.lights.forEach((light) => {
+                    if (light.coordinateSystemId !== cs.id) return;
+                    const mapped = lightToSceneMap.get(light.ligId);
+                    if (mapped) {
+                        pushCandidate(candidates, mapped.sceneId, mapped.sceneName);
+                    }
+                });
+
+                data.scans.forEach((scan) => {
+                    if (scan.coordinateSystemId !== cs.id) return;
+                    const mapped = lightToSceneMap.get(scan.ligId);
+                    if (mapped) {
+                        pushCandidate(candidates, mapped.sceneId, mapped.sceneName);
+                    }
+                });
+
+                const bestMatch = Array.from(candidates.entries()).sort((a, b) => {
+                    if (b[1].count !== a[1].count) return b[1].count - a[1].count;
+                    return a[0] - b[0];
+                })[0];
+
+                if (bestMatch) {
+                    linkedSceneId = bestMatch[0];
+                    sName = bestMatch[1].sceneName;
+                }
             }
 
             return {
                 id: cs.id,
                 name: cs.name,
-                sceneId: cs.sceneId,
-                sceneName: sName || (cs.sceneId ? `Scene ${cs.sceneId}` : "-"),
+                sceneId: linkedSceneId ?? null,
+                sceneName: sName || (linkedSceneId ? `Scene ${linkedSceneId}` : "-"),
                 lightIds: cs.lightIds || [],
             };
         });
-    }, [status, data]);
+    }, [status, data, lightToSceneMap]);
 
     const filteredStats = useMemo(() => {
         const lowerTerm = searchTerm.toLowerCase();
