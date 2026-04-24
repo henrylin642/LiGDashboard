@@ -9,6 +9,43 @@ function extractSceneId(value: string | null | undefined): number | null {
   return Number.isFinite(id) ? id : null;
 }
 
+function extractSceneName(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const index = trimmed.indexOf("-");
+  if (index === -1 || index === trimmed.length - 1) return null;
+  return trimmed.slice(index + 1).trim();
+}
+
+function normalizeSceneName(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+function addProjectOwner(
+  map: Map<number, number[]>,
+  sceneId: number | null,
+  projectId: number
+) {
+  if (sceneId === null) return;
+  if (!map.has(sceneId)) map.set(sceneId, []);
+  const list = map.get(sceneId)!;
+  if (!list.includes(projectId)) list.push(projectId);
+}
+
+function addProjectOwnerByName(
+  map: Map<string, number[]>,
+  sceneName: string | null,
+  projectId: number
+) {
+  const key = normalizeSceneName(sceneName);
+  if (!key) return;
+  if (!map.has(key)) map.set(key, []);
+  const list = map.get(key)!;
+  if (!list.includes(projectId)) list.push(projectId);
+}
+
 export function scopeDashboardData(
   data: DashboardData,
   projectIds: Set<number>
@@ -64,15 +101,18 @@ export function scopeDashboardData(
   );
 
   const sceneToProjects = new Map<number, number[]>();
+  const sceneNameToProjects = new Map<string, number[]>();
 
   // 1. Direct project.scenes
   for (const project of scopedProjects) {
     for (const sceneRaw of project.scenes || []) {
       const sceneId = extractSceneId(sceneRaw);
-      if (sceneId === null) continue;
-      if (!sceneToProjects.has(sceneId)) sceneToProjects.set(sceneId, []);
-      const list = sceneToProjects.get(sceneId)!;
-      if (!list.includes(project.projectId)) list.push(project.projectId);
+      addProjectOwner(sceneToProjects, sceneId, project.projectId);
+      addProjectOwnerByName(
+        sceneNameToProjects,
+        extractSceneName(sceneRaw),
+        project.projectId
+      );
     }
   }
 
@@ -82,9 +122,7 @@ export function scopeDashboardData(
     for (const lightId of lightIds) {
       const projectIds = scopedLightToProjectIds[lightId] || [];
       for (const projectId of projectIds) {
-        if (!sceneToProjects.has(sceneId)) sceneToProjects.set(sceneId, []);
-        const list = sceneToProjects.get(sceneId)!;
-        if (!list.includes(projectId)) list.push(projectId);
+        addProjectOwner(sceneToProjects, sceneId, projectId);
       }
     }
   }
@@ -94,27 +132,47 @@ export function scopeDashboardData(
     for (const config of project.lightConfigs || []) {
       for (const sceneRaw of config.scenes || []) {
         const sceneId = extractSceneId(sceneRaw);
-        if (sceneId === null) continue;
-        if (!sceneToProjects.has(sceneId)) sceneToProjects.set(sceneId, []);
-        const list = sceneToProjects.get(sceneId)!;
-        if (!list.includes(project.projectId)) list.push(project.projectId);
+        addProjectOwner(sceneToProjects, sceneId, project.projectId);
+        addProjectOwnerByName(
+          sceneNameToProjects,
+          extractSceneName(sceneRaw),
+          project.projectId
+        );
       }
     }
   }
 
+  // 4. Map via scene metadata directly when scene records already carry project ownership.
+  for (const scene of data.scenes || []) {
+    const projectId = scene.projectId ?? null;
+    if (projectId === null || !projectIds.has(projectId)) continue;
+    addProjectOwner(sceneToProjects, scene.id, projectId);
+    addProjectOwnerByName(sceneNameToProjects, scene.name, projectId);
+  }
+
   const relevantSceneIds = new Set(sceneToProjects.keys());
+  const relevantSceneNames = new Set(sceneNameToProjects.keys());
 
   const scopedArObjects = data.arObjects.filter(
-    (obj) => obj.sceneId !== null && relevantSceneIds.has(Number(obj.sceneId))
+    (obj) =>
+      (obj.sceneId !== null && relevantSceneIds.has(Number(obj.sceneId))) ||
+      (obj.sceneName !== null &&
+        relevantSceneNames.has(normalizeSceneName(obj.sceneName) ?? ""))
   );
 
   const arObjectProjectMap = new Map<number, Set<number>>();
   for (const obj of scopedArObjects) {
-    if (obj.sceneId === null) continue;
-    const owners = sceneToProjects.get(Number(obj.sceneId));
-    if (!owners || owners.length === 0) continue;
-    // ensure obj.id is handled as a number
-    arObjectProjectMap.set(Number(obj.id), new Set(owners));
+    const owners = new Set<number>();
+    if (obj.sceneId !== null) {
+      const byId = sceneToProjects.get(Number(obj.sceneId)) || [];
+      byId.forEach((projectId) => owners.add(projectId));
+    }
+    if (obj.sceneName) {
+      const byName = sceneNameToProjects.get(normalizeSceneName(obj.sceneName) ?? "") || [];
+      byName.forEach((projectId) => owners.add(projectId));
+    }
+    if (owners.size === 0) continue;
+    arObjectProjectMap.set(Number(obj.id), owners);
   }
 
   const scopedClicks = data.clicks.filter((click) => {

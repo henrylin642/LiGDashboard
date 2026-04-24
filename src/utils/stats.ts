@@ -1877,11 +1877,19 @@ export function buildProjectClickIndex(data: DashboardData): {
 function buildObjectProjectIndex(data: DashboardData): Map<number, number[]> {
   const map = new Map<number, number[]>();
   const sceneIndex = buildSceneProjectIndex(data);
+  const sceneNameIndex = buildSceneNameProjectIndex(data);
   data.arObjects.forEach((obj) => {
-    if (obj.sceneId === null) return;
-    const owners = sceneIndex.get(obj.sceneId);
-    if (!owners || owners.length === 0) return;
-    map.set(obj.id, owners);
+    const owners = new Set<number>();
+    if (obj.sceneId !== null) {
+      const byId = sceneIndex.get(obj.sceneId) ?? [];
+      byId.forEach((projectId) => owners.add(projectId));
+    }
+    if (obj.sceneName) {
+      const byName = sceneNameIndex.get(normalizeSceneName(obj.sceneName) ?? "") ?? [];
+      byName.forEach((projectId) => owners.add(projectId));
+    }
+    if (owners.size === 0) return;
+    map.set(obj.id, Array.from(owners));
   });
   return map;
 }
@@ -1942,7 +1950,7 @@ function buildProjectScanSummaries(
 
 function buildSceneProjectIndex(data: DashboardData): Map<number, number[]> {
   const map = new Map<number, number[]>();
-  const { projects, lightToProjectIds, sceneToLightIds } = data;
+  const { projects, lightToProjectIds, sceneToLightIds, scenes, projectById } = data;
 
   for (const project of projects) {
     for (const sceneRaw of project.scenes) {
@@ -1990,6 +1998,55 @@ function buildSceneProjectIndex(data: DashboardData): Map<number, number[]> {
     }
   }
 
+  for (const scene of scenes) {
+    const projectId = scene.projectId ?? null;
+    if (projectId === null || !projectById[projectId]) continue;
+    if (!map.has(scene.id)) {
+      map.set(scene.id, []);
+    }
+    const list = map.get(scene.id)!;
+    if (!list.includes(projectId)) {
+      list.push(projectId);
+    }
+  }
+
+  return map;
+}
+
+function buildSceneNameProjectIndex(data: DashboardData): Map<string, number[]> {
+  const map = new Map<string, number[]>();
+  const { projects, scenes, projectById } = data;
+
+  const add = (sceneName: string | null, projectId: number) => {
+    const key = normalizeSceneName(sceneName);
+    if (!key) return;
+    if (!map.has(key)) {
+      map.set(key, []);
+    }
+    const list = map.get(key)!;
+    if (!list.includes(projectId)) {
+      list.push(projectId);
+    }
+  };
+
+  for (const project of projects) {
+    for (const sceneRaw of project.scenes) {
+      add(extractSceneName(sceneRaw), project.projectId);
+    }
+
+    for (const config of project.lightConfigs ?? []) {
+      for (const sceneRaw of config.scenes ?? []) {
+        add(extractSceneName(sceneRaw), project.projectId);
+      }
+    }
+  }
+
+  for (const scene of scenes) {
+    const projectId = scene.projectId ?? null;
+    if (projectId === null || !projectById[projectId]) continue;
+    add(scene.name, projectId);
+  }
+
   return map;
 }
 
@@ -2007,6 +2064,12 @@ function extractSceneName(value: string | null | undefined): string | null {
   const index = trimmed.indexOf("-");
   if (index === -1 || index === trimmed.length - 1) return null;
   return trimmed.slice(index + 1).trim();
+}
+
+function normalizeSceneName(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
 }
 
 function buildSceneInfo(
