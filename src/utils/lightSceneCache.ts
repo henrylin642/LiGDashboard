@@ -1,4 +1,5 @@
 const STORAGE_KEY = "lig_light_scene_cache_v1";
+const LIG_API = "https://api.lig.com.tw";
 
 export interface LightSceneCacheEntry {
   sceneId: number;
@@ -67,4 +68,47 @@ export function mergeLightSceneCache(entries: Iterable<[number, LightSceneCacheE
   }
   writeLightSceneCache(next);
   return next;
+}
+
+async function fetchSceneForLight(lightId: number): Promise<LightSceneCacheEntry | null> {
+  try {
+    const res = await fetch(`${LIG_API}/api/v1/ar_objects_list/${lightId}`);
+    if (!res.ok) return null;
+    const payload = await res.json();
+    const scenes = Array.isArray(payload) ? payload : payload?.scenes;
+    if (!Array.isArray(scenes) || scenes.length === 0) return null;
+    const first = scenes[0];
+    const sceneId = Number(first.scene_id ?? first.id ?? 0);
+    if (!sceneId) return null;
+    const sceneName = String(first.scene_name ?? first.name ?? "").trim() || `Scene ${sceneId}`;
+    return { sceneId, sceneName };
+  } catch {
+    return null;
+  }
+}
+
+export async function warmLightSceneCache(lightIds: number[], batchSize = 10): Promise<Map<number, LightSceneCacheEntry>> {
+  const deduped = Array.from(new Set(lightIds.filter((id) => Number.isFinite(id) && id > 0)));
+  if (deduped.length === 0) return readLightSceneCache();
+
+  const result = readLightSceneCache();
+  const missing = deduped.filter((lightId) => !result.has(lightId));
+  if (missing.length === 0) return result;
+
+  for (let i = 0; i < missing.length; i += Math.max(1, batchSize)) {
+    const batch = missing.slice(i, i + Math.max(1, batchSize));
+    const entries = await Promise.all(batch.map((lightId) => fetchSceneForLight(lightId)));
+    const resolvedBatch: Array<[number, LightSceneCacheEntry]> = [];
+    batch.forEach((lightId, index) => {
+      const scene = entries[index];
+      if (!scene) return;
+      result.set(lightId, scene);
+      resolvedBatch.push([lightId, scene]);
+    });
+    if (resolvedBatch.length > 0) {
+      mergeLightSceneCache(resolvedBatch);
+    }
+  }
+
+  return readLightSceneCache();
 }

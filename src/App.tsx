@@ -66,6 +66,7 @@ import {
   type MergedPerformanceRow,
 } from "./utils/stats";
 import { scopeDashboardData } from "./utils/dataTransform";
+import { warmLightSceneCache } from "./utils/lightSceneCache";
 
 // --- Helper Functions for Chart Aggregation ---
 
@@ -291,6 +292,18 @@ function App() {
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!readyData) return;
+
+    const allLightIds = new Set<number>();
+    readyData.scans.forEach((scan) => allLightIds.add(scan.ligId));
+    readyData.lights.forEach((light) => allLightIds.add(light.ligId));
+    readyData.coordinateSystems.forEach((cs) => cs.lightIds.forEach((lightId) => allLightIds.add(lightId)));
+    readyData.projects.forEach((project) => project.lightIds.forEach((lightId) => allLightIds.add(lightId)));
+
+    void warmLightSceneCache(Array.from(allLightIds));
+  }, [readyData]);
 
   const ownerOptions = useMemo(
     () => (readyData ? extractOwnerOptions(readyData.projects) : []),
