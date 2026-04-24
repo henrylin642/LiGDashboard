@@ -437,6 +437,12 @@ function App() {
     [scopedData]
   );
 
+  const overviewClickMappingReady = useMemo(() => {
+    if (!readyData) return false;
+    if (readyData.clicks.length === 0) return true;
+    return readyData.arObjects.length > 0;
+  }, [readyData]);
+
   const projectRankRows = useMemo(() => {
     if (!scopedData) return [];
     const rows = computeProjectRankRows(scopedData)
@@ -1673,6 +1679,12 @@ function AllProjectsPage({
       <section>
         <SectionTitle title="Project Funnels" />
         <div className="panel panel--surface">
+          {!overviewClickMappingReady && (
+            <p style={{ marginBottom: "0.75rem", color: "#8a5a00", fontWeight: 600 }}>
+              Clicks 原始資料已載入，但目前缺少 AR Object 對照表，所以無法把 click 正確歸屬到 Project。
+              請先到 Settings 設定有效的 LiG token，讓系統載入 AR objects 後再重新查看。
+            </p>
+          )}
           {projectFunnelRows.length === 0 ? (
             <p>暫無符合條件的專案漏斗資料。</p>
           ) : (
