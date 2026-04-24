@@ -332,13 +332,14 @@ function App() {
     [readyData, selectedProjectId]
   );
 
-  // Lazy load AR objects for the selected project or all projects if on overview
+  // Lazy load AR objects for the selected project, overview, or raw click lookup.
   useEffect(() => {
     if (!dataState.loadArObjectsForLights) return;
 
-    if (page === "all" && readyData) {
+    if ((page === "all" || page === "clickRaw") && readyData) {
       const allLightIds = new Set<number>();
       readyData.projects.forEach((p) => p.lightIds.forEach((id) => allLightIds.add(id)));
+      readyData.lights.forEach((light) => allLightIds.add(light.ligId));
       dataState.loadArObjectsForLights(Array.from(allLightIds));
     } else if (selectedProject) {
       dataState.loadArObjectsForLights(selectedProject.lightIds);
@@ -1171,7 +1172,12 @@ function App() {
         {page === "sceneStats" && <SceneStatsPage />}
         {page === "coordinateStats" && <CoordinateSystemStatsPage />}
         {page === "scanRaw" && <ScanRawDataPage scans={readyData?.scans ?? []} />}
-        {page === "clickRaw" && <ClickRawLogPage clicks={readyData?.clicks ?? []} arObjects={readyData?.arObjects ?? []} />}
+        {page === "clickRaw" && (
+          <ClickRawLogPage
+            clicks={readyData?.clicks ?? []}
+            arObjects={readyData?.arObjects ?? []}
+          />
+        )}
         {page === "settings" && (
           <SettingsPage ownerOptions={ownerOptions} onNavigateHome={() => setPage("all")} onReloadData={dataState.reloadProjects} />
         )}
