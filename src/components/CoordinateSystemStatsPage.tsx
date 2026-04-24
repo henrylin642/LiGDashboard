@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDashboardData } from "../context/DashboardDataContext";
+import { mergeLightSceneCache, readLightSceneCache } from "../utils/lightSceneCache";
 
 type SortField = 'id' | 'name' | 'sceneId';
 type SortOrder = 'asc' | 'desc';
@@ -45,7 +46,7 @@ export function CoordinateSystemStatsPage() {
         if (status !== "ready" || !data || uniqueLightIds.length === 0) return;
 
         let cancelled = false;
-        const initialMap = new Map<number, { sceneId: number; sceneName: string }>();
+        const initialMap = readLightSceneCache() as Map<number, { sceneId: number; sceneName: string }>;
         Object.entries(data.lightToSceneMap || {}).forEach(([lightIdRaw, scene]) => {
             const lightId = Number(lightIdRaw);
             if (!Number.isFinite(lightId) || !scene?.sceneId) return;
@@ -63,10 +64,17 @@ export function CoordinateSystemStatsPage() {
                 if (cancelled) return;
                 const batch = missingLightIds.slice(i, i + BATCH);
                 const entries = await Promise.all(batch.map((lightId) => fetchSceneForLight(lightId)));
+                const resolvedBatch: Array<[number, { sceneId: number; sceneName: string }]> = [];
                 batch.forEach((lightId, index) => {
                     const item = entries[index];
-                    if (item) result.set(lightId, item);
+                    if (item) {
+                        result.set(lightId, item);
+                        resolvedBatch.push([lightId, item]);
+                    }
                 });
+                if (resolvedBatch.length > 0) {
+                    mergeLightSceneCache(resolvedBatch);
+                }
                 if (!cancelled) {
                     setLightToSceneMap(new Map(result));
                 }

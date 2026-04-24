@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 import { format } from "date-fns";
 import type { ScanRecord } from "../types";
 import { useDashboardData } from "../context/DashboardDataContext";
+import { mergeLightSceneCache, readLightSceneCache } from "../utils/lightSceneCache";
 
 const LIG_API = "https://api.lig.com.tw";
 
@@ -63,18 +64,32 @@ export function ScanRawDataPage({ scans }: ScanRawDataPageProps) {
 
         async function loadMappings() {
             const BATCH = 10;
-            const result = new Map<number, { sceneId: number; sceneName: string }>();
-            setFetchProgress({ done: 0, total: uniqueLightIds.length });
+            const result = readLightSceneCache() as Map<number, { sceneId: number; sceneName: string }>;
+            setLightToSceneMap(new Map(result));
 
-            for (let i = 0; i < uniqueLightIds.length; i += BATCH) {
+            const missingLightIds = uniqueLightIds.filter((lightId) => !result.has(lightId));
+            setFetchProgress({ done: uniqueLightIds.length - missingLightIds.length, total: uniqueLightIds.length });
+            if (missingLightIds.length === 0) return;
+
+            for (let i = 0; i < missingLightIds.length; i += BATCH) {
                 if (cancelled) return;
-                const batch = uniqueLightIds.slice(i, i + BATCH);
+                const batch = missingLightIds.slice(i, i + BATCH);
                 const results = await Promise.all(batch.map(lid => fetchSceneForLight(lid)));
+                const resolvedBatch: Array<[number, { sceneId: number; sceneName: string }]> = [];
                 batch.forEach((lid, idx) => {
                     const r = results[idx];
-                    if (r) result.set(lid, r);
+                    if (r) {
+                        result.set(lid, r);
+                        resolvedBatch.push([lid, r]);
+                    }
                 });
-                setFetchProgress({ done: Math.min(i + BATCH, uniqueLightIds.length), total: uniqueLightIds.length });
+                if (resolvedBatch.length > 0) {
+                    mergeLightSceneCache(resolvedBatch);
+                }
+                setFetchProgress({
+                    done: Math.min(uniqueLightIds.length, uniqueLightIds.length - missingLightIds.length + i + BATCH),
+                    total: uniqueLightIds.length
+                });
                 // Update map progressively
                 setLightToSceneMap(new Map(result));
             }
