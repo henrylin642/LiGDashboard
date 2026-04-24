@@ -437,12 +437,6 @@ function App() {
     [scopedData]
   );
 
-  const overviewClickMappingReady = useMemo(() => {
-    if (!readyData) return false;
-    if (readyData.clicks.length === 0) return true;
-    return readyData.arObjects.length > 0;
-  }, [readyData]);
-
   const projectRankRows = useMemo(() => {
     if (!scopedData) return [];
     const rows = computeProjectRankRows(scopedData)
@@ -1260,6 +1254,9 @@ function AllProjectsPage({
   clickHeatmapPoints,
   scopedData,
 }: AllProjectsPageProps) {
+  const overviewClickMappingReady =
+    !scopedData || scopedData.clicks.length === 0 || scopedData.arObjects.length > 0;
+
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [selectedDateStats, setSelectedDateStats] = useState<
     { projectId: number; projectName: string; clicks: number; scans: number }[]
